@@ -60,6 +60,16 @@ analytics?.setClientId(verifiedWebClientId);
 
 This waits for Preload/Main initialization, so early business events do not race the initial config. Raw `window.gtag` is also available after `await window.electronGoogleTag.ready()`. An application without automatic setup returns `null` rather than breaking its business flow. Remote frames and third-party pages must never be added to your application's trust policy casually.
 
+## Production identity and recovery
+
+Automatic setup keeps the canonical anonymous ID in Main under `userData/electron-ga4-identities`, using a flushed temporary file and atomic replacement. The first enabled initialization migrates the existing renderer `clientIdStorageKey` if no Main identity exists. Later windows and process restarts use Main's saved ID even if renderer storage is missing, blocked or stale. `setClientId()` persists the verified handoff and synchronizes sibling clients without another page view. Keep `userData`, the collector `partition`, and the identity storage key stable across releases. This assumes one owning Main process, as with Electron's single-instance application model; clearing the application data creates a new installation identity.
+
+`renderer.clientIdStorageKey: false` opts out of Main identity management and leaves identity to Google's persistent collector cookies. Fully manual `/desktop` clients still use their renderer storage; this Main persistence applies to automatic initialization.
+
+If the collector renderer crashes, the transport reloads it in the same persistent session and restores native configuration, global settings and the latest consent state. Recovery forces `send_page_view: false` and never replays events or completed callbacks. Commands dispatched during recovery wait for it; an event already in flight at the crash may be lost. Recovery uses at most three attempts with backoff for consecutive failures; a minute of healthy operation resets that budget. Disposal cancels pending retries. This is process recovery, not offline event storage or guaranteed Google delivery.
+
+For operational visibility, pass `onError(error)` in Main and inspect `analytics.diagnostics()`. Error codes include `IDENTITY_STORAGE_FAILED`, `IDENTITY_SYNC_FAILED`, `COLLECTOR_LOAD_FAILED` and `COLLECTOR_RECOVERY_EXHAUSTED`. Diagnostics return `identityPersistence` (`unused`, `persisted`, `memory`), `collectorStatus` and the total `recoveryAttempts`, without user identifiers. A disk failure retains the current in-memory ID and does not crash the app; it cannot guarantee that ID across a future restart. Collector `ready` status means its local command queue is available, not that Google has processed the events.
+
 ## Lower-level integration
 
 Existing `createGoogleTagTransport`, `installGoogleTagPreload` and `GoogleAnalyticsClient` / `getDesktopGoogleAnalytics` remain available. `createGoogleTagTransport` does not automatically initialize renderers unless `renderer` settings are provided. `installGoogleTagPreload({ autoInitialize: false })` disables its initialization request for fully manual integrations.
@@ -106,6 +116,9 @@ ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --ignore-scripts
 pnpm run check
 pnpm test
 pnpm pack
+# Real Electron persistence/restart/crash acceptance, with all Google requests blocked:
+node tests/electron-production.cjs
+# Optionally set ELECTRON_BINARY to an existing Electron executable.
 # Explicit real-Google acceptance (requires a locally installed Electron binary):
 GA4_MEASUREMENT_ID=G-XXXXXXXXXX pnpm exec electron tests/electron-automatic.cjs
 GA4_MEASUREMENT_ID=G-XXXXXXXXXX pnpm exec electron tests/electron-transport.cjs

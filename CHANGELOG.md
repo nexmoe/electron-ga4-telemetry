@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Persist automatic installation identity atomically in Main, migrate existing renderer IDs, and retain one identity across stale/blocked storage, sibling windows and application restarts.
+- Recover the collector renderer after crashes with bounded backoff, restoring consent/configuration without replaying business events or extra page views; expose non-fatal errors and operational diagnostics.
+- Add real offline Electron acceptance for an actual collector crash and full-process restart with a different first window.
+
 - Coordinate automatic anonymous identity across concurrently starting windows and retain verified renderer identity updates in Main.
 
 - Add automatic Main + Preload setup with a packaged browser runtime; no renderer initialization or host-side DOM adapters required.

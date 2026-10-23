@@ -45,6 +45,9 @@ export declare class GoogleAnalyticsClient {
     private persistIdentity;
     private initializeIdentity;
     setClientId(clientId: string): boolean;
+    /** @internal Main synchronizes siblings without echoing another native config command. */
+    synchronizeClientId(clientId: string): boolean;
+    private applyClientId;
     setEnabled(enabled: boolean): void;
     /** Native gtag command API; payloads and callbacks pass through unchanged. */
     gtag(...args: unknown[]): void;

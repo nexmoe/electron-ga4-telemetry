@@ -4,6 +4,9 @@ export type AutoRendererOptions = Omit<DesktopGoogleAnalyticsOptions, 'measureme
     pageLocation?: string;
 };
 type RendererSetup = AutoRendererOptions | false | ((sender: WebContents) => AutoRendererOptions | false);
+export interface GoogleTagTransportError extends Error {
+    code: 'IDENTITY_STORAGE_FAILED' | 'IDENTITY_SYNC_FAILED' | 'COLLECTOR_LOAD_FAILED' | 'COLLECTOR_RECOVERY_EXHAUSTED';
+}
 export interface GoogleTagTransportOptions {
     measurementId: string;
     /** Dedicated HTTPS origin owned by the application; served locally, never from the network. */
@@ -18,6 +21,8 @@ export interface GoogleTagTransportOptions {
     nativeDownloads?: boolean;
     /** Opt into automatic renderer setup. installGoogleAnalytics enables it by default. */
     renderer?: RendererSetup;
+    /** Optional non-fatal diagnostics; messages exclude client IDs and user-data paths. */
+    onError?: (error: GoogleTagTransportError) => void;
 }
 /**
  * Run the unmodified official tag on HTTPS, independently of the app's custom protocol.
@@ -29,6 +34,11 @@ export declare function createGoogleTagTransport(options: GoogleTagTransportOpti
     collector: BrowserWindow;
     recordExternalOpen: (sender: WebContents, url: string) => void;
     openExternal: (sender: WebContents, url: string, openOptions?: Parameters<typeof shell.openExternal>[1]) => Promise<void>;
+    diagnostics: () => {
+        identityPersistence: "unused" | "persisted" | "memory";
+        collectorStatus: "ready" | "failed" | "loading" | "recovering" | "disposed";
+        recoveryAttempts: number;
+    };
 };
 export interface InstallGoogleAnalyticsOptions extends Omit<GoogleTagTransportOptions, 'origin' | 'isAllowedSender'> {
     /** Optional owned HTTPS collector origin; the default is served only inside the private session. */
@@ -45,5 +55,10 @@ export declare function installGoogleAnalytics(options: InstallGoogleAnalyticsOp
     collector: BrowserWindow;
     recordExternalOpen: (sender: WebContents, url: string) => void;
     openExternal: (sender: WebContents, url: string, openOptions?: Parameters<typeof shell.openExternal>[1]) => Promise<void>;
+    diagnostics: () => {
+        identityPersistence: "unused" | "persisted" | "memory";
+        collectorStatus: "ready" | "failed" | "loading" | "recovering" | "disposed";
+        recoveryAttempts: number;
+    };
 };
 export {};

@@ -6,6 +6,23 @@
 
 桥接验收须检查：官方请求中的会话与首次访问标记、原生 engagement_time_msec、应用前后台状态、匿名 ID 与会话跨重载持久性、事件回调、原始电商参数、禁用采集和未授权 renderer 拒绝。`user_engagement` 只汇总尚未附在其他事件中的参与时长，不能仅以该独立事件是否出现判断全部参与度。
 
+## 生产身份与恢复加固（2026-10-23）
+
+自动入口的 Main 身份文件现为持久化来源；首次迁移既有 Renderer ID，后续重启及辅助窗口使用相同 ID。
+回归覆盖：存储缺失/拒绝/残留旧值、并发窗口、身份更新同步、原子替换中断保留旧文件、
+禁用时不创建身份、重新启用保持身份、Google 原生身份 opt-out、命令先后顺序和慢回调不阻塞业务事件。
+采集窗口崩溃后恢复 consent/config/set，关闭额外 PV，不重放事件；覆盖重试上限和退出取消重试。
+
+`node tests/electron-production.cjs` 在独立临时 userData 中运行两次完整 Electron 进程，
+验证旧 ID 迁移、多窗口同步、实际 `forcefullyCrashRenderer()` 后命令队列恢复，以及改变首次窗口、
+Renderer 残留旧 ID 后的跨进程重启保持身份。所有 Google 脚本和采集请求在创建 collector 前被阻断；
+本机 Electron 39.8.9 / macOS 已通过。这证明 Electron 生命周期、IPC、配置恢复和磁盘持久化，
+不证明 Google 入库、原生参与度或标准报表准确，也不代替签名安装包覆盖升级及 Windows/Linux 验收。
+
+Main 的 `onError` 和 `diagnostics()` 用于检测身份降级到内存、collector 故障与重试耗尽；
+身份文件所在 userData、collector partition 和身份键需要跨发布保持稳定。应用应由单个 Main 拥有
+该 transport。用户清空应用数据会重置安装身份；磁盘不可写时不保证下次启动保持身份。
+
 ## 2026-10-23 真实接入与后台结果
 
 联调直接链接本地 `electron-ga4-telemetry`，在 Viora 的生产 profile 完整构建、真实 Electron、
