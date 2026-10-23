@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Preserve native GA4 consent and advertising defaults, event-name case, explicit destinations and nested ecommerce data.
+- Separate SDK pause/resume from consent and retain the initialized Electron tag and native session.
+- Add native bridge search/form/link/download metadata and inner-pane scroll; keep redaction explicit and retain the legacy renderer policy.
+- Allow explicit validated HTTPS collection origins without relaxing the default CSP allowlist.
+- Add focused native/DOM regression tests and an opt-in real Electron/Google acceptance script.
+
 ## 0.3.0
 
 - Package the v0.3 starter as a pinned GitHub dependency with compiled exports and CI.

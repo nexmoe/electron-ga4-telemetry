@@ -1,6 +1,12 @@
 import type { GA4EventParams } from './ga4-web';
 export interface EnhancedMeasurementOptions {
     scroll?: boolean;
+    /** Also observe scrollable Electron application panes. */
+    scrollContainers?: boolean;
+    siteSearch?: boolean;
+    searchQueryParameters?: string[];
+    /** Native GA4 metadata, or marked forms/videos and origin-only outbound URLs. */
+    privacy?: 'native' | 'redacted';
     outboundClicks?: boolean;
     fileDownloads?: boolean;
     forms?: boolean;

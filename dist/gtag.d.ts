@@ -12,6 +12,8 @@ export interface GoogleAnalyticsOptions {
     sendPageView?: boolean;
     /** Forward official gtag configuration, e.g. cookie settings or debug_mode. */
     config?: Record<string, unknown>;
+    /** Optional application-owned consent defaults; omitted preserves native Google defaults. */
+    consent?: Record<string, unknown>;
     /** Bridge mode observes the application's DOM, since the HTTPS collector has no app DOM. */
     enhancedMeasurement?: EnhancedMeasurementOptions | false;
     /** Bridge mode sends one virtual page view for each mapped History route. */
@@ -20,7 +22,7 @@ export interface GoogleAnalyticsOptions {
 }
 export declare function getOrCreateGoogleTag(): GoogleTag;
 export declare function loadGoogleTag(measurementId: string, onLoad?: () => void): void;
-/** Synchronize Google's hard disable flag with the HTTPS collector as well as this document. */
+/** Pause delivery without changing application-owned consent or rebuilding the Electron tag. */
 export declare function setGoogleTagEnabled(measurementId: string, enabled: boolean): void;
 /**
  * Official gtag transport for applications that already own identity and event policy.

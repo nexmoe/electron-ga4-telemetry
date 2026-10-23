@@ -445,7 +445,7 @@ export class ElectronGA4Telemetry {
     const options = this.options.enhancedFallback;
     if (!options?.confirmedNativeEnhancedMeasurementDisabled) return;
     this.cleanup.push(installEnhancedMeasurement(
-      options, this.origin, () => this.lastScreen, (name, params) => this.track(name, params),
+      { ...options, privacy: 'redacted' }, this.origin, () => this.lastScreen, (name, params) => this.track(name, params),
     ));
   }
 

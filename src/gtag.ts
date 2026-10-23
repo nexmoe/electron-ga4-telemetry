@@ -22,6 +22,8 @@ export interface GoogleAnalyticsOptions {
   sendPageView?: boolean;
   /** Forward official gtag configuration, e.g. cookie settings or debug_mode. */
   config?: Record<string, unknown>;
+  /** Optional application-owned consent defaults; omitted preserves native Google defaults. */
+  consent?: Record<string, unknown>;
   /** Bridge mode observes the application's DOM, since the HTTPS collector has no app DOM. */
   enhancedMeasurement?: EnhancedMeasurementOptions | false;
   /** Bridge mode sends one virtual page view for each mapped History route. */
@@ -71,7 +73,7 @@ export function loadGoogleTag(measurementId: string, onLoad?: () => void): void 
   document.head.appendChild(script);
 }
 
-/** Synchronize Google's hard disable flag with the HTTPS collector as well as this document. */
+/** Pause delivery without changing application-owned consent or rebuilding the Electron tag. */
 export function setGoogleTagEnabled(measurementId: string, enabled: boolean): void {
   (window as unknown as Record<string, unknown>)[`ga-disable-${measurementId}`] = !enabled;
   const bridge = (window as GoogleTagWindow).electronGoogleTag;
@@ -97,12 +99,16 @@ export class GoogleAnalyticsClient {
     if (options.clientId !== undefined && !/^\d+\.\d+$/.test(options.clientId)) throw new Error('Invalid anonymous GA4 clientId');
     if (options.pageLocation) {
       const page = new URL(options.pageLocation);
-      if (page.protocol !== 'https:' || page.username || page.password) {
-        throw new Error('pageLocation must use HTTPS without credentials');
+      if (!['http:', 'https:'].includes(page.protocol) || page.username || page.password) {
+        throw new Error('pageLocation must use HTTP/HTTPS without credentials');
       }
     }
     this.pageLocation = options.pageLocation;
-    this.pageTitle = options.pageTitle;
+    this.pageTitle = options.pageTitle ?? (
+      typeof window !== 'undefined' && typeof document !== 'undefined' &&
+      (window as GoogleTagWindow).electronGoogleTag && options.config?.page_title === undefined
+        ? document.title : undefined
+    );
     this.id = options.measurementId.toUpperCase();
     this.clientId = options.clientId;
     this.enabled = options.enabled === true;
@@ -113,14 +119,9 @@ export class GoogleAnalyticsClient {
     if (this.initialized) return true;
     const gtag = getOrCreateGoogleTag();
     setGoogleTagEnabled(this.id, true);
-    gtag('consent', 'default', {
-      analytics_storage: 'granted', ad_storage: 'denied',
-      ad_user_data: 'denied', ad_personalization: 'denied',
-    });
+    if (this.options.consent) gtag('consent', 'default', this.options.consent);
     gtag('js', new Date());
     gtag('config', this.id, {
-      allow_google_signals: false,
-      allow_ad_personalization_signals: false,
       ...this.options.config,
       ...(this.clientId ? { client_id: this.clientId } : {}),
       ...(this.pageLocation ? { page_location: this.pageLocation } : {}),
@@ -146,30 +147,37 @@ export class GoogleAnalyticsClient {
 
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
-    if (!enabled) this.cleanup.splice(0).forEach(dispose => dispose());
+    if (!enabled) this.cleanup.splice(0).reverse().forEach(dispose => dispose());
     if (!this.initialized) {
       if (enabled) this.initialize();
       return;
     }
     setGoogleTagEnabled(this.id, enabled);
     if (enabled) this.watchApplication();
-    getOrCreateGoogleTag()('consent', 'update', {
-      analytics_storage: enabled ? 'granted' : 'denied',
-    });
   }
 
   /** Native gtag command API; payloads and callbacks pass through unchanged. */
   gtag(...args: unknown[]): void {
+    if (args[0] === 'consent') {
+      getOrCreateGoogleTag()(...args);
+      return;
+    }
+    if (!this.enabled) return;
+    // Preserve native pre-config consent defaults and global settings.
+    if (!this.initialized && args[0] === 'set') {
+      getOrCreateGoogleTag()(...args);
+      return;
+    }
     if (this.initialize()) getOrCreateGoogleTag()(...args);
   }
 
   track(name: string, params: Record<string, unknown> = {}): void {
-    if (!/^[a-z][a-z0-9_]{0,39}$/.test(name) || !this.initialize()) return;
+    if (!/^[a-zA-Z][a-zA-Z0-9_]{0,39}$/.test(name) || !this.initialize()) return;
     getOrCreateGoogleTag()('event', name, {
       ...(this.pageLocation ? { page_location: this.pageLocation } : {}),
       ...(this.pageTitle ? { page_title: this.pageTitle } : {}),
-      ...params,
       send_to: this.id,
+      ...params,
     });
   }
   private watchApplication(): void {
@@ -208,7 +216,7 @@ export class GoogleAnalyticsClient {
     if (this.options.enhancedMeasurement !== false) {
       this.cleanup.push(installEnhancedMeasurement(
         this.options.enhancedMeasurement ?? {
-          scroll: true, outboundClicks: true, fileDownloads: true, forms: true, html5Video: true,
+          scroll: true, scrollContainers: true, outboundClicks: true, fileDownloads: true, forms: true, html5Video: true, siteSearch: true,
         },
         origin, () => this.pageLocation ?? 'home', (name, params) => this.track(name, params),
       ));
@@ -216,7 +224,7 @@ export class GoogleAnalyticsClient {
   }
 
   destroy(): void {
-    this.cleanup.splice(0).forEach(dispose => dispose());
+    this.cleanup.splice(0).reverse().forEach(dispose => dispose());
     this.enabled = false;
   }
 

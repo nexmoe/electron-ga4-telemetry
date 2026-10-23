@@ -24,7 +24,7 @@ test('user sends events with a stable anonymous ID and one Google tag', () => {
   assert.equal(Object.prototype.toString.call(b.window.dataLayer[0]), '[object Arguments]');
   assert.deepEqual(b.commands().find(([command]) => command === 'config')[2], {
     client_id: '123.456', page_location: 'https://desktop.example.com/', page_title: 'Desktop',
-    send_page_view: false, allow_google_signals: false, allow_ad_personalization_signals: false,
+    send_page_view: false,
   });
   assert.deepEqual(b.commands().at(-1), ['event', 'desktop_activation_completed', {
     method: 'browser', send_to: 'G-TEST123', page_location: 'https://desktop.example.com/', page_title: 'Desktop',

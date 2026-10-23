@@ -7,6 +7,8 @@ export interface GoogleTagTransportOptions {
     isAllowedSender: (sender: WebContents) => boolean;
     /** A persistent, dedicated session keeps Google's own first-party cookies. */
     partition?: string;
+    /** Explicit HTTPS collection endpoints, e.g. a first-party GA4 server container. */
+    additionalAllowedOrigins?: string[];
 }
 /**
  * Run the unmodified official tag on HTTPS, independently of the app's custom protocol.

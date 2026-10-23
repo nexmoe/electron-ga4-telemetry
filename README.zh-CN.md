@@ -6,14 +6,16 @@
 
 实测确认当前官方 gtag 会中止非 HTTP/HTTPS 文档的 GA4 采集。虚拟页面地址不能解决它。自定义协议应用应在主进程安装 `/transport`，在已有 preload 中安装 `/transport-preload`。库用独立、持久化的 HTTPS 采集页运行未改写的官方脚本，不迁移应用 origin 或已有存储。前后台状态来自可信应用窗口。
 
-`gtag(...args)` 保留官方命令、嵌套电商参数和回调。`/renderer` 的推荐事件、隐私过滤、增强采集回退与桌面额外指标继续保留。桥接模式下的页面路由、滚动和链接由应用 DOM 适配器采集；表单和 HTML5 视频须使用显式标记，搜索词须主动批准。不能把这种适配写成所有网页、原生 OS 操作和 YouTube 场景均已自动验证。
+`/gtag` 原生客户端保留官方命令、配置、大小写事件名、显式 `send_to`、嵌套电商参数和回调；不默认注入 consent 或关闭广告信号。应用可通过 `consent` 和 `config` 显式选择策略。SDK 的暂停/恢复只控制上报，不修改原生 consent，也不销毁 Google 会话。
+
+桥接增强层补充文档/内部容器 90% 滚动、完整外链与下载元数据、普通表单、HTML5 视频和 URL 查询参数搜索。`enhancedMeasurement.privacy='redacted'` 则保留 origin-only 外链、表单/视频标记和搜索词审批策略；旧 `/renderer` 的隐私过滤继续保留。`additionalAllowedOrigins` 可显式允许经过校验的 HTTPS 自建采集域名，不移除 CSP 白名单。YouTube iframe、原生系统下载和 GA4 后台归因仍需对应平台集成与验收，不能声称所有场景均已自动验证。
 
 
 基于 **Google 官方 `gtag.js`** 的 Electron 主进程 + Preload + Renderer 指标封装。仅需要 Web Data Stream 的 `G-...` Measurement ID，**不需要 API Secret**。
 
 **新增：** 对齐 GA4 Web 推荐事件（含标准收入/电商 `items[]`）、可选增强型衡量回退、内置 `gtag(get)` 会话诊断。原生报表的接入与验收步骤见 [GA4 Web 预设指标指南](./docs/GA4-WEB-PRESETS.md)。
 
-> 当前状态：TypeScript 静态编译和本地模拟测试通过。**尚未在真实 Electron 打包应用、`app://` / `file://`、真实 GA4 账号内完成端到端验证。** GA4 原生用户、会话、留存、来源和地理报表的准确性仍需测试。此仓库可作为固定版本的 GitHub 依赖使用，尚未发布 npm。
+> 当前状态：原生命令与增强层定向测试通过；真实沙箱 Electron + 自定义协议 + Google tag 已验证 client/session 回调、暂停恢复、暂停请求阻断与内部容器滚动。**打包应用及 GA4 后台报表仍未完整验收。** GA4 原生用户、会话、留存、来源和地理报表的准确性仍需测试。此仓库可作为固定版本的 GitHub 依赖使用，尚未发布 npm。
 
 ## 文件
 

@@ -414,7 +414,7 @@ class ElectronGA4Telemetry {
         const options = this.options.enhancedFallback;
         if (!options?.confirmedNativeEnhancedMeasurementDisabled)
             return;
-        this.cleanup.push((0, enhanced_1.installEnhancedMeasurement)(options, this.origin, () => this.lastScreen, (name, params) => this.track(name, params)));
+        this.cleanup.push((0, enhanced_1.installEnhancedMeasurement)({ ...options, privacy: 'redacted' }, this.origin, () => this.lastScreen, (name, params) => this.track(name, params)));
     }
     watchUsage() {
         const interval = Math.max(60_000, this.options.usageReportIntervalMs ?? DEFAULT_USAGE_INTERVAL);

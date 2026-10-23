@@ -17,12 +17,19 @@ function createGoogleTagTransport(options) {
     if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' ||
         origin.search || origin.hash)
         throw new Error('A clean HTTPS origin is required');
+    const additionalOrigins = (options.additionalAllowedOrigins ?? []).map(value => {
+        const url = new URL(value);
+        if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash)
+            throw new Error('Additional collection endpoints must be clean HTTPS origins');
+        return url.origin;
+    }).join(' ');
     const id = options.measurementId.toUpperCase();
     const partition = options.partition ?? `persist:electron-ga4-${id}`;
     if (!partition.startsWith('persist:'))
         throw new Error('The Google tag session must persist');
     const collectorSession = electron_1.session.fromPartition(partition);
     let disposed = false;
+    let collectionEnabled = true;
     const html = `<!doctype html><meta charset="utf-8"><title>Electron GA4 transport</title>
 <style>html,body{margin:0;min-height:200vh}</style>
 <script>
@@ -44,9 +51,12 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
         if (new URL(request.url).origin === origin.origin) {
             return new Response(html, { headers: {
                     'content-type': 'text/html; charset=utf-8',
-                    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://www.googletagmanager.com; connect-src https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com; img-src https://*.google-analytics.com; base-uri 'none'; form-action 'none'",
+                    'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://www.googletagmanager.com; connect-src https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com ${additionalOrigins}; img-src https://*.google-analytics.com ${additionalOrigins}; base-uri 'none'; form-action 'none'`,
                 } });
         }
+        // Suspend delivery, keeping Google's initialized tag, cookies and consent intact.
+        if (!collectionEnabled && !(new URL(request.url).hostname === 'www.googletagmanager.com' && new URL(request.url).pathname.startsWith('/gtag/')))
+            return Response.error();
         return collectorSession.fetch(request, { bypassCustomProtocolHandlers: true });
     });
     const collector = new electron_1.BrowserWindow({
@@ -75,7 +85,7 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
             if (disposed || generation !== foregroundGeneration)
                 return;
             const focused = electron_1.BrowserWindow.getFocusedWindow();
-            const active = Boolean(focused && !focused.isDestroyed() && focused.isVisible() &&
+            const active = Boolean(collectionEnabled && focused && !focused.isDestroyed() && focused.isVisible() &&
                 focused.isFocused() && !focused.isMinimized() && options.isAllowedSender(focused.webContents));
             await collector.webContents.executeJavaScript(`window.__electronGa4SetForeground(${active})`);
         }
@@ -117,6 +127,13 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
             !['config', 'set', 'get', 'event', 'consent', 'js', '__electron_ga4_enabled'].includes(args[0])) {
             throw new Error('Invalid Google tag command');
         }
+        if (args[0] === '__electron_ga4_enabled') {
+            collectionEnabled = args[1] === true;
+            void updateForeground();
+            return null;
+        }
+        if (!collectionEnabled && args[0] === 'event')
+            return null;
         const serialized = JSON.stringify(args);
         if (serialized.length > 256_000)
             throw new Error('Google tag command too large');
@@ -138,10 +155,6 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
         for (const key of Object.keys(value)) value[key] = revive(value[key]);
         return value;
       };
-      if (args[0] === '__electron_ga4_enabled') {
-        window['ga-disable-${id}'] = args[1] !== true;
-        return null;
-      }
       revive(args);
       if (args[0] === 'js' && typeof args[1] === 'string') args[1] = new Date(args[1]);
       window.gtag(...args);

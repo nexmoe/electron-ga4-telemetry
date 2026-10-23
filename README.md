@@ -48,7 +48,7 @@ analytics.setClientId(verifiedWebClientId); // optional browser-to-app handoff
 analytics.setEnabled(false);
 ```
 
-`gtag(...args)` forwards the native `config`, `set`, `get`, `event`, `consent` and `js` commands, nested parameters and callbacks. `config` accepts official tag settings. Native GA4 first-visit, session and engagement processing stays in Google's script. Consent is opt-in; advertising signals default off and can be explicitly configured.
+`gtag(...args)` forwards the native `config`, `set`, `get`, `event`, `consent` and `js` commands, nested parameters and callbacks. `config` accepts official tag settings. Native GA4 first-visit, session and engagement processing stays in Google's script. The native client does not inject consent or advertising-signal settings. Pass `consent` and official `config` values when the application wants to own those policies. SDK pause/resume does not grant or withdraw consent; use native consent commands for that.
 
 The transport uses its own persistent Electron session. Only allowlisted main frames may issue commands; the collector has no Node access or application preload. Foreground visibility follows trusted application windows rather than the invisible collector. Dispose the transport before app shutdown.
 
@@ -56,11 +56,11 @@ The transport uses its own persistent Electron session. Only allowlisted main fr
 
 - Official initial `page_view` defaults on. Set `sendPageView: false` to manage it yourself.
 - In bridge mode, History changes send sanitized virtual page views. `autoPageViews: false` disables this. Supply `mapRoute` to define static screen names.
-- Bridge mode observes the application's DOM for 90% document scroll, outbound anchors and download links. It redacts outbound URLs to their origin. Forms and HTML5 video require `data-ga4-form` / `data-ga4-video` markers. Configure `enhancedMeasurement` or set it to `false` to control this policy.
-- Search queries are never inferred from arbitrary app input. The v0.3 API supports explicit approved search events. YouTube and native OS actions require their own integration; an invisible collector cannot observe another document's iframe or an operating-system download.
+- Bridge mode observes 90% document and inner-pane scroll, outbound anchors, downloads, forms, HTML5 video and URL-based site search. Native mode preserves full link/download metadata and detects ordinary forms without special markers. Set `enhancedMeasurement: { privacy: "redacted", ... }` for origin-only URLs, marked forms/videos and no inferred search terms; the legacy `/renderer` privacy policy retains that behavior. Set individual measurement flags or `enhancedMeasurement: false` to control adapters.
+- Site search reads only configured URL query parameters (`q`, `s`, `search`, `query`, `keyword` by default), never arbitrary app input. Redacted mode and the v0.3 API require explicit approved search events. YouTube and native OS actions require their own integration; an invisible collector cannot observe another document's iframe or an operating-system download.
 - On an ordinary HTTP/HTTPS page without the preload bridge, the official tag runs directly and its stream's enhanced measurement settings apply.
 
-The native command API preserves gtag capabilities. Desktop DOM adapters are explicit application policy and do not promise identical automatic collection for every website/OS integration. Do not install another collector for the same stream in the same renderer document.
+The native command API preserves GA4 command/configuration capabilities, including case-sensitive event names, explicit `send_to` destinations and ecommerce `items[]`. `additionalAllowedOrigins` explicitly allows clean HTTPS first-party collection origins without removing the transport CSP allowlist. Desktop DOM adapters are explicit application policy and do not promise identical automatic collection for every website/OS integration. Do not install another collector for the same stream in the same renderer document.
 
 ## Optional v0.3 desktop instrumentation
 
@@ -77,6 +77,8 @@ ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --ignore-scripts
 pnpm run check
 pnpm test
 pnpm pack
+# Explicit real-Google acceptance (requires a locally installed Electron binary):
+GA4_MEASUREMENT_ID=G-XXXXXXXXXX pnpm exec electron tests/electron-transport.cjs
 ```
 
 Tests cover the public queue protocol, consent, identity, ecommerce, privacy and desktop adapters. Real Electron network validation is also required: cookie/session state and outgoing payloads do not prove Google has processed the event in reports. Standard reports, attribution and retention require GA4-side acceptance.
