@@ -50,17 +50,30 @@ analytics.setEnabled(false);
 
 `gtag(...args)` forwards the native `config`, `set`, `get`, `event`, `consent` and `js` commands, nested parameters and callbacks. `config` accepts official tag settings. Native GA4 first-visit, session and engagement processing stays in Google's script. The native client does not inject consent or advertising-signal settings. Pass `consent` and official `config` values when the application wants to own those policies. SDK pause/resume does not grant or withdraw consent; use native consent commands for that.
 
-The transport uses its own persistent Electron session. Only allowlisted main frames may issue commands; the collector has no Node access or application preload. Foreground visibility follows trusted application windows rather than the invisible collector. Dispose the transport before app shutdown.
+The transport uses its own persistent Electron session. Only allowlisted main frames may issue commands; the collector has no Node access or application preload. Foreground visibility follows trusted application windows rather than the invisible collector, and becomes hidden during system suspend or screen lock. Dispose the transport before app shutdown.
 
 ## Automatic events and boundaries
 
 - Official initial `page_view` defaults on. Set `sendPageView: false` to manage it yourself.
 - In bridge mode, History changes send sanitized virtual page views. `autoPageViews: false` disables this. Supply `mapRoute` to define static screen names.
-- Bridge mode observes 90% document and inner-pane scroll, outbound anchors, downloads, forms, HTML5 video and URL-based site search. Native mode preserves full link/download metadata and detects ordinary forms without special markers. Set `enhancedMeasurement: { privacy: "redacted", ... }` for origin-only URLs, marked forms/videos and no inferred search terms; the legacy `/renderer` privacy policy retains that behavior. Set individual measurement flags or `enhancedMeasurement: false` to control adapters.
-- Site search reads only configured URL query parameters (`q`, `s`, `search`, `query`, `keyword` by default), never arbitrary app input. Redacted mode and the v0.3 API require explicit approved search events. YouTube and native OS actions require their own integration; an invisible collector cannot observe another document's iframe or an operating-system download.
+- Bridge mode observes 90% document and inner-pane scroll, outbound anchors, downloads, forms, HTML5 video and URL-based site search. Native mode preserves full link/download metadata and detects ordinary forms without special markers. Set `enhancedMeasurement: { privacy: "redacted", ... }` for origin-only URLs, marked forms/videos and no inferred search terms; the legacy `/renderer` privacy policy retains that behavior. Set individual measurement flags or `enhancedMeasurement: false` to control adapters. These application-DOM adapter flags do not automatically synchronize with GA4 Admin enhanced-measurement switches.
+- Site search reads only configured URL query parameters (`q`, `s`, `search`, `query`, `keyword` by default), never arbitrary app input. Redacted mode and the v0.3 API require explicit approved search events. Enable `youtubeVideo` for JS API-enabled YouTube embeds. The adapter uses the official iframe API; the host must allow its scripts/frames in CSP and provide a valid HTTP referrer. In redacted mode, embeds also require `data-ga4-video`. Third-party sign-in or playback restrictions are not bypassed.
 - On an ordinary HTTP/HTTPS page without the preload bridge, the official tag runs directly and its stream's enhanced measurement settings apply.
 
 The native command API preserves GA4 command/configuration capabilities, including case-sensitive event names, explicit `send_to` destinations and ecommerce `items[]`. `additionalAllowedOrigins` explicitly allows clean HTTPS first-party collection origins without removing the transport CSP allowlist. Desktop DOM adapters are explicit application policy and do not promise identical automatic collection for every website/OS integration. Do not install another collector for the same stream in the same renderer document.
+
+## Native browser opens and downloads
+
+Enable `nativeDownloads: true` on the main transport and `nativeDownloads: true, fileDownloads: true` in the renderer's enhanced measurement options. The transport observes real `will-download` events only for trusted app windows. Server-provided filenames support extensionless download URLs; local save paths are never sent. `file_download` measures initiation, not successful completion.
+
+After a successful OS browser open, notify the transport using the originating WebContents:
+
+```ts
+await shell.openExternal(url);
+transport.recordExternalOpen(sourceWindow.webContents, url);
+```
+
+The preload relays these notifications to the renderer, so its current page metadata and privacy policy apply. Only HTTP/HTTPS URLs without credentials are accepted. Matching DOM/native link notifications within 1.5 seconds are coalesced to avoid counting the same action twice. This does not intercept or replace Electron's `shell` implementation. Multiple renderer windows share one collector; configure `sendPageView: false, autoPageViews: false` on auxiliary windows.
 
 ## Optional v0.3 desktop instrumentation
 
@@ -79,8 +92,11 @@ pnpm test
 pnpm pack
 # Explicit real-Google acceptance (requires a locally installed Electron binary):
 GA4_MEASUREMENT_ID=G-XXXXXXXXXX pnpm exec electron tests/electron-transport.cjs
+# Optional real YouTube playback; exit 2 means sign-in/playback blocked, not passed:
+GA4_MEASUREMENT_ID=G-XXXXXXXXXX pnpm exec electron tests/electron-youtube.cjs
+GA4_MEASUREMENT_ID=G-XXXXXXXXXX pnpm exec electron tests/electron-consent.cjs
 ```
 
-Tests cover the public queue protocol, consent, identity, ecommerce, privacy and desktop adapters. Real Electron network validation is also required: cookie/session state and outgoing payloads do not prove Google has processed the event in reports. Standard reports, attribution and retention require GA4-side acceptance.
+Tests cover the public queue protocol, consent, identity, ecommerce, privacy and desktop adapters. Real Electron network validation is also required: cookie/session state and outgoing payloads do not prove Google has processed the event in reports. The 2026-10-23 Viora acceptance confirmed standard events in GA4 Realtime, including native `first_visit`, `session_start` and `user_engagement`; see [validation](docs/VALIDATION.md). Standard reports, attribution and retention still require separate acceptance.
 
 MIT licensed.

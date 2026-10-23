@@ -216,7 +216,7 @@ export class GoogleAnalyticsClient {
     if (this.options.enhancedMeasurement !== false) {
       this.cleanup.push(installEnhancedMeasurement(
         this.options.enhancedMeasurement ?? {
-          scroll: true, scrollContainers: true, outboundClicks: true, fileDownloads: true, forms: true, html5Video: true, siteSearch: true,
+          scroll: true, scrollContainers: true, outboundClicks: true, fileDownloads: true, forms: true, html5Video: true, youtubeVideo: true, siteSearch: true, nativeDownloads: true,
         },
         origin, () => this.pageLocation ?? 'home', (name, params) => this.track(name, params),
       ));

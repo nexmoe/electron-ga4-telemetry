@@ -30,6 +30,8 @@ function createGoogleTagTransport(options) {
     const collectorSession = electron_1.session.fromPartition(partition);
     let disposed = false;
     let collectionEnabled = true;
+    let suspended = false;
+    let locked = false;
     const html = `<!doctype html><meta charset="utf-8"><title>Electron GA4 transport</title>
 <style>html,body{margin:0;min-height:200vh}</style>
 <script>
@@ -85,15 +87,51 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
             if (disposed || generation !== foregroundGeneration)
                 return;
             const focused = electron_1.BrowserWindow.getFocusedWindow();
-            const active = Boolean(collectionEnabled && focused && !focused.isDestroyed() && focused.isVisible() &&
+            const active = Boolean(collectionEnabled && !suspended && !locked && focused && !focused.isDestroyed() && focused.isVisible() &&
                 focused.isFocused() && !focused.isMinimized() && options.isAllowedSender(focused.webContents));
             await collector.webContents.executeJavaScript(`window.__electronGa4SetForeground(${active})`);
         }
         catch { /* Analytics must not affect the app lifecycle. */ }
     }
+    function recordExternalOpen(sender, url) {
+        try {
+            if (disposed || !collectionEnabled || sender.isDestroyed() || !options.isAllowedSender(sender))
+                return;
+            const target = new URL(url);
+            if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password)
+                return;
+            sender.send('electron-ga4:native-event', { type: 'click', url: target.href });
+        }
+        catch { /* OS settings schemes and invalid URLs are not outbound web clicks. */ }
+    }
+    const observedSessions = new Map();
+    function observeDownloads(sender) {
+        if (!options.nativeDownloads || observedSessions.has(sender.session))
+            return;
+        const sourceSession = sender.session;
+        const download = (_event, item, source) => {
+            try {
+                if (disposed || !collectionEnabled || !source || source.isDestroyed() || !options.isAllowedSender(source))
+                    return;
+                source.send('electron-ga4:native-event', { type: 'download', url: item.getURLChain()[0] ?? item.getURL(), filename: item.getFilename() });
+            }
+            catch { /* A closing renderer must not affect the download itself. */ }
+        };
+        sourceSession.on('will-download', download);
+        observedSessions.set(sourceSession, () => sourceSession.removeListener('will-download', download));
+    }
+    const onSuspend = () => { suspended = true; void updateForeground(); };
+    const onResume = () => { suspended = false; void updateForeground(); };
+    const onLock = () => { locked = true; void updateForeground(); };
+    const onUnlock = () => { locked = false; void updateForeground(); };
+    electron_1.powerMonitor.on('suspend', onSuspend);
+    electron_1.powerMonitor.on('resume', onResume);
+    electron_1.powerMonitor.on('lock-screen', onLock);
+    electron_1.powerMonitor.on('unlock-screen', onUnlock);
     function observeWindow(_event, window) {
         if (window === collector || observedWindows.has(window))
             return;
+        observeDownloads(window.webContents);
         const onChange = () => {
             if (window.isDestroyed()) {
                 observedWindows.delete(window);
@@ -173,11 +211,18 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
         for (const remove of observedWindows.values())
             remove();
         observedWindows.clear();
+        for (const remove of observedSessions.values())
+            remove();
+        observedSessions.clear();
+        electron_1.powerMonitor.removeListener('suspend', onSuspend);
+        electron_1.powerMonitor.removeListener('resume', onResume);
+        electron_1.powerMonitor.removeListener('lock-screen', onLock);
+        electron_1.powerMonitor.removeListener('unlock-screen', onUnlock);
         electron_1.app.removeListener('browser-window-focus', updateForeground);
         electron_1.app.removeListener('browser-window-blur', updateForeground);
         if (!collector.isDestroyed())
             collector.destroy();
         collectorSession.protocol.unhandle('https');
     }
-    return { ready, dispose, collector };
+    return { ready, dispose, collector, recordExternalOpen };
 }

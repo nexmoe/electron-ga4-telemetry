@@ -8,7 +8,7 @@
 
 当前官方 tag 会中止非 HTTP/HTTPS 文档的 GA4 采集。上文的协议风险在真实 Electron 中已确认，`standard + secure` 或虚拟 `page_location` 都不能改变这个检查。自定义协议应用应使用根 README 中的 `/transport` 与 `/transport-preload`，让官方 tag 在独立 HTTPS 页面中处理原生会话与 cookie。
 
-采集页不包含应用 DOM。桥接模式通过应用侧适配器处理路由、滚动、链接，以及明确标记的表单和 HTML5 视频。无需把采集页的空白文档当作应用页面。搜索、YouTube、原生下载等仍需要对应业务集成。完整原生命令通过 `gtag(...args)` 转发；过滤后的 `track()` 是另一个可选策略接口。
+采集页不包含应用 DOM。桥接模式通过应用侧适配器处理路由、内部容器滚动、链接、表单、HTML5 视频和 URL 搜索；脱敏策略仍要求表单/视频显式标记。可选 `youtubeVideo` 使用官方 iframe API，`nativeDownloads` 接收真实 DownloadItem，原生外链通过 `recordExternalOpen` 接入。宿主须显式启用对应选项，YouTube 还受 CSP、Referer 和第三方播放策略约束。无需把采集页的空白文档当作应用页面。完整原生命令通过 `gtag(...args)` 转发；过滤后的 `track()` 是另一个可选策略接口。
 
 ## 1. 预设指标对应关系
 
@@ -111,7 +111,7 @@ const telemetry = new ElectronGA4Telemetry({
 - `click`：站外 HTTPS 链接点击。只传公开的域名与去掉路径/参数的 URL origin。
 - `file_download`：点击常见文件扩展名的 HTML 链接。如果下载由 Electron 下载管理器触发，需业务代码显式调用 `telemetry.fileDownload('mp4')`。表示下载操作，不代表下载成功；下载成功请继续使用 `telemetry.download('completed', ...)`。
 - `form_start` / `form_submit`：仅追踪带 `data-ga4-form="signup"` 的 `<form>`，从不读取表单内容。
-- `video_start` / `video_progress` / `video_complete`：仅追踪带 `data-ga4-video="demo_video"` 的原生 `<video>`；不会从文件路径或视频标题自动读取个人内容。YouTube iframe 由 Google 的增强衡量负责，其行为独立于 HTML5 fallback。
+- `video_start` / `video_progress` / `video_complete`：仅追踪带 `data-ga4-video="demo_video"` 的原生 `<video>`；不会从文件路径或视频标题自动读取个人内容。普通 HTTP/HTTPS 页面上的 YouTube iframe 可由官方增强衡量处理；自定义协议桥接使用独立 `youtubeVideo` 适配器，不会从隐藏 collector 自动观察到 iframe。
 - 网站搜索 `view_search_results` / `search` 不会抓取任意 URL 查询词。请主动上报经过批准的非敏感查询。
 
 ```html

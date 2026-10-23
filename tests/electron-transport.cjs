@@ -20,7 +20,7 @@ app.whenReady().then(async () => {
   protocol.handle('ga4test', () => new Response('<html><body>Native GA4 acceptance</body></html>', {headers:{'content-type':'text/html'}}));
   main = new BrowserWindow({show:false,webPreferences:{preload,sandbox:true,contextIsolation:true}});
   await main.loadURL('ga4test://desktop/');
-  const sources = Object.fromEntries(['core','enhanced','gtag'].map(name => [`./${name}`,readFileSync(join(__dirname,`../dist/${name}.js`),'utf8')]));
+  const sources = Object.fromEntries(['core','links','youtube','enhanced','gtag'].map(name => [`./${name}`,readFileSync(join(__dirname,`../dist/${name}.js`),'utf8')]));
   await main.webContents.executeJavaScript(`(() => {
    const sources=${JSON.stringify(sources)}, cache={};
    function require(id) { if(cache[id])return cache[id].exports; const module={exports:{}};cache[id]=module;new Function('require','exports','module',sources[id])(require,module.exports,module);return module.exports; }
@@ -51,4 +51,4 @@ app.whenReady().then(async () => {
  } catch (error) { console.error(error); process.exitCode=1; }
  finally {transport?.dispose();if(main&&!main.isDestroyed())main.destroy();app.quit();}
 }).catch(error=>{console.error(error);process.exitCode=1;app.quit()});
-app.on('will-quit',()=>{rmSync(directory,{recursive:true,force:true})});
+app.on('will-quit',()=>{rmSync(directory,{recursive:true,force:true});app.exit(Number(process.exitCode)||0)});

@@ -11,6 +11,10 @@ export interface EnhancedMeasurementOptions {
     fileDownloads?: boolean;
     forms?: boolean;
     html5Video?: boolean;
+    /** Observe JS API-enabled YouTube embeds using the official iframe API. */
+    youtubeVideo?: boolean;
+    /** Receive actual Electron DownloadItem notifications through the preload. */
+    nativeDownloads?: boolean;
 }
 /** Application-DOM events for a tag running in a separate HTTPS collector. */
 export declare function installEnhancedMeasurement(options: EnhancedMeasurementOptions, origin: string, getScreen: () => string, track: (name: string, params: GA4EventParams) => void): () => void;

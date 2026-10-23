@@ -8,14 +8,14 @@
 
 `/gtag` 原生客户端保留官方命令、配置、大小写事件名、显式 `send_to`、嵌套电商参数和回调；不默认注入 consent 或关闭广告信号。应用可通过 `consent` 和 `config` 显式选择策略。SDK 的暂停/恢复只控制上报，不修改原生 consent，也不销毁 Google 会话。
 
-桥接增强层补充文档/内部容器 90% 滚动、完整外链与下载元数据、普通表单、HTML5 视频和 URL 查询参数搜索。`enhancedMeasurement.privacy='redacted'` 则保留 origin-only 外链、表单/视频标记和搜索词审批策略；旧 `/renderer` 的隐私过滤继续保留。`additionalAllowedOrigins` 可显式允许经过校验的 HTTPS 自建采集域名，不移除 CSP 白名单。YouTube iframe、原生系统下载和 GA4 后台归因仍需对应平台集成与验收，不能声称所有场景均已自动验证。
+桥接增强层补充文档/内部容器 90% 滚动、完整外链与下载元数据、普通表单、HTML5 视频和 URL 查询参数搜索。`enhancedMeasurement.privacy='redacted'` 则保留 origin-only 外链、表单/视频标记和搜索词审批策略；旧 `/renderer` 的隐私过滤继续保留。`additionalAllowedOrigins` 可显式允许经过校验的 HTTPS 自建采集域名，不移除 CSP 白名单。新增 `youtubeVideo` 适配启用 JS API 的 YouTube iframe；宿主须允许官方脚本/frame CSP 并提供有效 HTTP Referer，脱敏模式还须标记 `data-ga4-video`。主进程启用 `nativeDownloads`、渲染器同时启用 `nativeDownloads` 和 `fileDownloads` 后，可观察真实 Electron 下载；成功调用 `shell.openExternal` 后用 `transport.recordExternalOpen(sender, url)` 记录原生外链。相同 URL 的 DOM/原生事件在 1.5 秒内去重，下载只记录开始、不上传本地保存路径。
 
 
 基于 **Google 官方 `gtag.js`** 的 Electron 主进程 + Preload + Renderer 指标封装。仅需要 Web Data Stream 的 `G-...` Measurement ID，**不需要 API Secret**。
 
 **新增：** 对齐 GA4 Web 推荐事件（含标准收入/电商 `items[]`）、可选增强型衡量回退、内置 `gtag(get)` 会话诊断。原生报表的接入与验收步骤见 [GA4 Web 预设指标指南](./docs/GA4-WEB-PRESETS.md)。
 
-> 当前状态：原生命令与增强层定向测试通过；真实沙箱 Electron + 自定义协议 + Google tag 已验证 client/session 回调、暂停恢复、暂停请求阻断与内部容器滚动。**打包应用及 GA4 后台报表仍未完整验收。** GA4 原生用户、会话、留存、来源和地理报表的准确性仍需测试。此仓库可作为固定版本的 GitHub 依赖使用，尚未发布 npm。
+> 当前状态：原生命令与增强层定向测试通过；真实沙箱 Electron + 自定义协议 + Google tag 已验证 client/session 回调、暂停恢复、暂停请求阻断与内部容器滚动。**GA4 Realtime 已确认首次访问、会话、参与度、外链、下载、表单、滚动和 HTML5 视频事件；YouTube 播放被第三方“请登录以确认不是机器人”拦截，未记为通过。打包应用及标准报表仍未完整验收。** GA4 原生用户、会话、留存、来源和地理报表的准确性仍需测试。此仓库可作为固定版本的 GitHub 依赖使用，尚未发布 npm。
 
 ## 文件
 
@@ -28,7 +28,7 @@
 - `docs/GA4-DASHBOARD.md`：报表指标定义、后台需要注册的自定义维度与指标。
 - `docs/VALIDATION.md`：真正打包后必须验证的事项。
 - `dist/`：已编译 CommonJS JS 和 `.d.ts` 文件。也可以复制 `src/` 到现有 TypeScript 工程，由 Vite/electron-vite/webpack 编译。
-- `tests/`：离线 Node 模拟测试。`pnpm install && pnpm test` 将使用真实的 Electron TypeScript 定义编译代码。仓库还含离线 TypeScript stub，仅用于当前沙箱编译，不能代替 Electron 实机测试。
+- `tests/`：离线 Node 契约测试及显式联网 Electron 验收。`pnpm install && pnpm test` 将使用真实的 Electron TypeScript 定义编译代码。仓库还含离线 TypeScript stub，仅用于当前沙箱编译，不能代替 Electron 实机测试。
 
 ## 1. 接入示例
 

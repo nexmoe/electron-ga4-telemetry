@@ -6,5 +6,10 @@ const electron_1 = require("electron");
 function installGoogleTagPreload() {
     electron_1.contextBridge.exposeInMainWorld('electronGoogleTag', {
         send: (args) => electron_1.ipcRenderer.invoke('electron-ga4:command', args),
+        onNativeEvent: (callback) => {
+            const listener = (_event, value) => callback(value);
+            electron_1.ipcRenderer.on('electron-ga4:native-event', listener);
+            return () => electron_1.ipcRenderer.removeListener('electron-ga4:native-event', listener);
+        },
     });
 }

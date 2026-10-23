@@ -6,6 +6,47 @@
 
 桥接验收须检查：官方请求中的会话与首次访问标记、原生 engagement_time_msec、应用前后台状态、匿名 ID 与会话跨重载持久性、事件回调、原始电商参数、禁用采集和未授权 renderer 拒绝。`user_engagement` 只汇总尚未附在其他事件中的参与时长，不能仅以该独立事件是否出现判断全部参与度。
 
+## 2026-10-23 真实接入与后台结果
+
+联调直接链接本地 `electron-ga4-telemetry`，在 Viora 的生产 profile 完整构建、真实 Electron、
+`viora://` renderer 中运行，使用独立 userData；没有使用 E2E 的认证或后端替身。
+Measurement ID 为 `G-P3EMH45Z9G`，属性为
+[Viora Desktop](https://analytics.google.com/analytics/web/#/a391568952p560476207/realtime/overview)。
+
+已确认：
+
+- 主进程实际打开系统浏览器后，上报 `click`；实际 HTTP 下载返回附件文件名，Electron
+  DownloadItem 完成保存，上报 `file_download`，脱敏请求不含原始文件名和本地路径。
+- 应用 DOM 中的标记表单、真实内部滚动容器和实际播放的 HTML5 视频分别产生
+  `form_start`、`form_submit`、90% `scroll`、`video_start`、10/25/50/75% `video_progress`、
+  `video_complete`。DOM/媒体为验收 fixture，不能据此宣称每个宿主业务面板均已验收。
+- 上述事件实际 Google 请求均返回 204，参数中没有表单输入值或外链私有 query。
+- Realtime 确实出现 `first_visit`、`session_start`、`user_engagement`、页面浏览以及上述增强事件，
+  因此已证明实时入库，不再只依赖 collection endpoint 的 HTTP 状态。
+- SDK 暂停时请求被阻止，恢复后原生 ID/会话及回调正常，重建 renderer、重启应用后身份保持。
+- 原生 consent 拒绝再授权后，后续实际事件可恢复身份回调；单独 `get(client_id)` 曾超时。
+  对完全绕过客户端/preload 的官方 tag 做相同对照，也复现先超时、后续事件后恢复；
+  这是实测原生行为，不是桥接额外丢失。`tests/electron-consent.cjs` 保留独立对照命令。
+  不注入伪造页面/业务事件来掩盖此边界，也不将 SDK 暂停等同于撤回 consent。
+- 用户授权的真实生产认证完成后，Desktop 发出 `desktop_activation_completed`，
+  `client_id_linked=true`；Realtime 也出现该激活事件。引导按用户要求走跳过分支，未提交业务问题。
+
+YouTube 的官方 API 与真实 embed 能加载，已按官方契约安装监听器；播放被 YouTube 的
+“Sign in to confirm you’re not a bot” 阻断，**开始/进度/结束未完成真实验收**。
+独立命令 `GA4_MEASUREMENT_ID=G-... pnpm exec electron tests/electron-youtube.cjs`
+允许设置 `YOUTUBE_VIDEO_ID`，需要可正常播放的网络环境；阻断退出码为 2，不能当作通过。
+
+系统 suspend/resume、lock/unlock 已接线，但未主动休眠或锁住用户电脑；精确参与时长、
+签名安装包、Windows/Linux 真机、标准报表、留存和来源归因未验收。GA4 Web stream 及原生
+命令兼容不等于 Google Ads/Floodlight、多 property 漏斗或全部 gtag 场景已经验证。
+15 个相关库契约测试及真实 Electron transport smoke 通过；未运行整个宿主仓库门禁。
+
+## v0.3 原始验收清单
+
+以下清单主要针对旧 `/main`、`/renderer` 可选桌面指标；其自定义日活/会话/滚动不能代替
+官方 GA4 指标。当前 `/gtag` 桥接增强层是单次 90% 滚动并可观察内部容器；宿主不需要
+在自己的自定义协议页面额外加载第二份 gtag.js。
+
 ## 0. 环境要求
 
 - [ ] GA4 Web data stream Measurement ID 正确，最好使用独立桌面 Web stream。

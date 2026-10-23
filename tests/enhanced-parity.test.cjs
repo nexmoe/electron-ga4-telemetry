@@ -23,7 +23,7 @@ test('user retains full outbound-link and download metadata in native mode',()=>
  // When the user clicks that link.
  link.dispatchEvent(new b.window.MouseEvent('click',{bubbles:true,cancelable:true}));
  // Then native URL, name and link properties survive the adapter.
- assert.deepEqual(b.events(),[['event','file_download',{file_extension:'pdf',file_name:'report.pdf',link_url:link.href,link_id:'download',link_text:'Report'}],['event','click',{outbound:true,link_domain:'files.example.com',link_url:link.href,link_id:'download',link_classes:'resource'}]]);stop();b.window.happyDOM.abort();
+ assert.deepEqual(b.events(),[['event','file_download',{file_extension:'pdf',file_name:'report.pdf',link_domain:'files.example.com',link_url:link.href,link_id:'download',link_text:'Report'}],['event','click',{outbound:true,link_domain:'files.example.com',link_url:link.href,link_id:'download',link_classes:'resource'}]]);stop();b.window.happyDOM.abort();
 });
 test('user retains automatic unmarked form measurement in native mode',()=>{
  // Given a normal form without library-specific markers.
@@ -31,7 +31,7 @@ test('user retains automatic unmarked form measurement in native mode',()=>{
  // When the user enters and submits the form without sending any field value.
  input.dispatchEvent(new b.window.FocusEvent('focusin',{bubbles:true}));form.dispatchEvent(new b.window.Event('submit',{bubbles:true,cancelable:true}));
  // Then the standard form events carry only form metadata.
- assert.deepEqual(b.events(),[['event','form_start',{form_id:'signup'}],['event','form_submit',{form_id:'signup'}]]);stop();b.window.happyDOM.abort();
+ assert.deepEqual(b.events(),[['event','form_start',{form_id:'signup',form_name:'',form_destination:'https://desktop.example.com/'}],['event','form_submit',{form_id:'signup',form_name:'',form_destination:'https://desktop.example.com/',form_submit_text:''}]]);stop();b.window.happyDOM.abort();
 });
 test('user can explicitly retain the redacted desktop policy',()=>{
  // Given an app opts into origin-only URLs and marked forms.

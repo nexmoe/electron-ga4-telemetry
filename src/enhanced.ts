@@ -1,5 +1,7 @@
 import { safeToken } from './core';
 import type { GA4EventParams } from './ga4-web';
+import { createLinkMeasurement, type NativeMeasurementEvent } from './links';
+import { installYouTubeMeasurement } from './youtube';
 
 export interface EnhancedMeasurementOptions {
   scroll?: boolean;
@@ -13,6 +15,10 @@ export interface EnhancedMeasurementOptions {
   fileDownloads?: boolean;
   forms?: boolean;
   html5Video?: boolean;
+  /** Observe JS API-enabled YouTube embeds using the official iframe API. */
+  youtubeVideo?: boolean;
+  /** Receive actual Electron DownloadItem notifications through the preload. */
+  nativeDownloads?: boolean;
 }
 
 /** Application-DOM events for a tag running in a separate HTTPS collector. */
@@ -72,38 +78,25 @@ export function installEnhancedMeasurement(
       listeners.push(() => document.removeEventListener('scroll', onScroll, true));
     }
 
+    const links = createLinkMeasurement(options, origin, track);
     if (options.outboundClicks || options.fileDownloads) {
-      const virtualDomain = new URL(origin).hostname;
-      const onClick = (e: MouseEvent) => {
-        const target = e.target as Element | null;
-        const anchor = target?.closest?.('a[href]');
-        if (!anchor) return;
-        const href = anchor.getAttribute('href');
-        if (!href) return;
-        let url: URL;
-        try { url = new URL(href, window.location.href || origin); }
-        catch { return; }
-        if (!['http:', 'https:'].includes(url.protocol)) return;
-        if (options.fileDownloads) {
-          const ext = /\.([a-z0-9]{1,12})$/i.exec(url.pathname)?.[1]?.toLowerCase();
-          const known = /^(pdf|txt|csv|docx?|xlsx?|zip|gz|7z|rar|mp[34]|m4a|avi|mov|exe|dmg|pkg)$/i.test(ext ?? '');
-          if (known) track('file_download', { file_extension: ext!, ...(!redacted ? {
-            file_name: url.pathname.split('/').pop() ?? '', link_url: url.href,
-            link_id: anchor.id, link_text: anchor.textContent?.trim() ?? '',
-          } : {}) });
-        }
-        if (options.outboundClicks && url.hostname !== virtualDomain &&
-            url.hostname !== window.location.hostname) {
-          const host = safeToken(url.hostname.toLowerCase(), 80);
-          if (host) track('click', { outbound: true, link_domain: host,
-            link_url: redacted ? url.origin : url.href,
-            ...(!redacted ? { link_id: anchor.id, link_classes: anchor.className } : {}),
-          });
-        }
+      const onClick = (event: MouseEvent) => {
+        const anchor = (event.target as Element | null)?.closest?.('a[href]');
+        const href = anchor?.getAttribute('href');
+        if (!anchor || !href) return;
+        try { links.record('click', new URL(href, window.location.href).href, 'dom', undefined, anchor); }
+        catch { /* Invalid links are not analytics events. */ }
       };
       document.addEventListener('click', onClick, true);
       listeners.push(() => document.removeEventListener('click', onClick, true));
     }
+    const bridge = (window as unknown as {
+      electronGoogleTag?: { onNativeEvent?: (callback: (event: NativeMeasurementEvent) => void) => () => void };
+    }).electronGoogleTag;
+    if (bridge?.onNativeEvent) listeners.push(bridge.onNativeEvent(event => {
+      if (event.type === 'download' && options.nativeDownloads !== true) return;
+      links.record(event.type, event.url, 'native', event.filename);
+    }));
 
     if (options.forms) {
       let started = new WeakSet<Element>();
@@ -115,17 +108,23 @@ export function installEnhancedMeasurement(
         if (onScreen !== getScreen()) { onScreen = getScreen(); started = new WeakSet(); }
         const formId = redacted ? safeToken(form.getAttribute('data-ga4-form'), 40) :
           (form.getAttribute('data-ga4-form') || form.id || form.getAttribute('name') || 'form');
-        return formId ? { form, formId } : undefined;
+        return formId ? { form, params: { form_id: formId, ...(!redacted ? {
+          form_name: form.getAttribute('name') ?? '',
+          form_destination: (form as HTMLFormElement).action,
+        } : {}) } } : undefined;
       };
       const onFocus = (e: Event) => {
         const data = formData(e.target);
         if (!data || started.has(data.form)) return;
         started.add(data.form);
-        track('form_start', { form_id: data.formId });
+        track('form_start', data.params);
       };
       const onSubmit = (e: Event) => {
         const data = formData(e.target);
-        if (data) track('form_submit', { form_id: data.formId });
+        if (data) track('form_submit', { ...data.params, ...(!redacted ? {
+          form_submit_text: (e as SubmitEvent).submitter?.textContent?.trim() ||
+            ((e as SubmitEvent).submitter as HTMLInputElement | null)?.value || '',
+        } : {}) });
       };
       document.addEventListener('focusin', onFocus, true);
       document.addEventListener('submit', onSubmit, true);
@@ -146,12 +145,16 @@ export function installEnhancedMeasurement(
         const duration = video.duration;
         const props: GA4EventParams = {
           video_title: label,
-          ...(!redacted ? { video_url: video.currentSrc || video.src, video_current_time: Math.round(video.currentTime), video_provider: 'html5' } : {}),
+          video_current_time: Math.round(video.currentTime), video_provider: 'html5',
+          visible: video.getBoundingClientRect().bottom > 0 && video.getBoundingClientRect().top < window.innerHeight,
+          ...(!redacted ? { video_url: video.currentSrc || video.src } : {}),
           ...(Number.isFinite(duration) && duration > 0 ? { video_duration: Math.round(duration) } : {}),
         };
         if (e.type === 'play') {
-          if (video.currentTime < 1) videoProgress.set(video, new Set());
-          track('video_start', props);
+          if (!videoProgress.has(video)) {
+            videoProgress.set(video, new Set());
+            track('video_start', { ...props, video_percent: 0 });
+          }
         } else if (e.type === 'timeupdate' && Number.isFinite(duration) && duration > 0) {
           const percent = video.currentTime / duration * 100;
           let seen = videoProgress.get(video);
@@ -163,7 +166,8 @@ export function installEnhancedMeasurement(
             }
           }
         } else if (e.type === 'ended') {
-          track('video_complete', props);
+          track('video_complete', { ...props, video_percent: 100 });
+          videoProgress.delete(video);
         }
       };
       for (const name of ['play', 'timeupdate', 'ended']) {
@@ -172,5 +176,6 @@ export function installEnhancedMeasurement(
       }
     }
 
-    return () => { for (const dispose of listeners) dispose(); };
+    if (options.youtubeVideo) listeners.push(installYouTubeMeasurement(redacted, track));
+    return () => { for (const dispose of listeners.reverse()) dispose(); };
 }

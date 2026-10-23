@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add trusted-window native browser-open/download adapters, response filenames and DOM/native deduplication without exposing local save paths.
+- Complete standard form metadata and HTML5 playback lifecycle; add an optional official YouTube iframe API adapter.
+- Synchronize collector visibility with system suspend/resume and screen lock/unlock.
+- Record real Viora/Electron collection and GA4 Realtime acceptance; keep YouTube anti-bot playback blocking explicit.
+
 - Preserve native GA4 consent and advertising defaults, event-name case, explicit destinations and nested ecommerce data.
 - Separate SDK pause/resume from consent and retain the initialized Electron tag and native session.
 - Add native bridge search/form/link/download metadata and inner-pane scroll; keep redaction explicit and retain the legacy renderer policy.

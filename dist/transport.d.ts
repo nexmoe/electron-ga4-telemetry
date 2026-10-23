@@ -9,6 +9,8 @@ export interface GoogleTagTransportOptions {
     partition?: string;
     /** Explicit HTTPS collection endpoints, e.g. a first-party GA4 server container. */
     additionalAllowedOrigins?: string[];
+    /** Observe real DownloadItems only for trusted application windows. */
+    nativeDownloads?: boolean;
 }
 /**
  * Run the unmodified official tag on HTTPS, independently of the app's custom protocol.
@@ -18,4 +20,5 @@ export declare function createGoogleTagTransport(options: GoogleTagTransportOpti
     ready: Promise<void>;
     dispose: () => void;
     collector: BrowserWindow;
+    recordExternalOpen: (sender: WebContents, url: string) => void;
 };
