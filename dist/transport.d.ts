@@ -35,8 +35,8 @@ export declare function createGoogleTagTransport(options: GoogleTagTransportOpti
     recordExternalOpen: (sender: WebContents, url: string) => void;
     openExternal: (sender: WebContents, url: string, openOptions?: Parameters<typeof shell.openExternal>[1]) => Promise<void>;
     diagnostics: () => {
-        identityPersistence: "unused" | "persisted" | "memory";
-        collectorStatus: "ready" | "failed" | "loading" | "recovering" | "disposed";
+        identityPersistence: "memory" | "persisted" | "unused";
+        collectorStatus: "disposed" | "failed" | "loading" | "ready" | "recovering";
         recoveryAttempts: number;
     };
 };
@@ -56,8 +56,8 @@ export declare function installGoogleAnalytics(options: InstallGoogleAnalyticsOp
     recordExternalOpen: (sender: WebContents, url: string) => void;
     openExternal: (sender: WebContents, url: string, openOptions?: Parameters<typeof shell.openExternal>[1]) => Promise<void>;
     diagnostics: () => {
-        identityPersistence: "unused" | "persisted" | "memory";
-        collectorStatus: "ready" | "failed" | "loading" | "recovering" | "disposed";
+        identityPersistence: "memory" | "persisted" | "unused";
+        collectorStatus: "disposed" | "failed" | "loading" | "ready" | "recovering";
         recoveryAttempts: number;
     };
 };

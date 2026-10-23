@@ -11,5 +11,5 @@ export interface NativeMeasurementEvent {
 }
 /** One action can produce both an anchor event and an Electron notification. */
 export declare function createLinkMeasurement(options: LinkMeasurementOptions, origin: string, track: (name: string, params: GA4EventParams) => void): {
-    record(type: "click" | "download", href: string, source: "dom" | "native", filename?: string, anchor?: Element): void;
+    record(type: 'click' | 'download', href: string, source: 'dom' | 'native', filename?: string, anchor?: Element): void;
 };

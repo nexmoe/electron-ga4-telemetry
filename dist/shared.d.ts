@@ -31,12 +31,12 @@ export interface TelemetryBridge {
     reportActivity(): void;
 }
 export declare const TELEMETRY_IPC: {
-    readonly CONTEXT: "electron-ga4:context";
-    readonly READY: "electron-ga4:ready";
-    readonly ENABLED: "electron-ga4:enabled";
-    readonly EVENT: "electron-ga4:event";
-    readonly CAMPAIGN: "electron-ga4:campaign";
-    readonly ACTIVITY: "electron-ga4:activity";
+    readonly CONTEXT: 'electron-ga4:context';
+    readonly READY: 'electron-ga4:ready';
+    readonly ENABLED: 'electron-ga4:enabled';
+    readonly EVENT: 'electron-ga4:event';
+    readonly CAMPAIGN: 'electron-ga4:campaign';
+    readonly ACTIVITY: 'electron-ga4:activity';
 };
 declare global {
     interface Window {
