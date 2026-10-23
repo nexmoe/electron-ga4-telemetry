@@ -20,6 +20,9 @@ const source = `(function initializeDesktopAnalytics(options) {
     return module.exports;
   }
   const client = require('./desktop').getDesktopGoogleAnalytics(options);
-  return client.initialize() ? options.measurementId.toUpperCase() : null;
+  if (!client.initialize()) return null;
+  const id = options.measurementId.toUpperCase();
+  const config = Array.from(window.dataLayer ?? []).reverse().find(args => args[0] === 'config' && args[1] === id && typeof args[2]?.client_id === 'string');
+  return {measurementId: id, clientId: config?.[2].client_id};
 })\n`;
 writeFileSync(join(__dirname, '../dist/renderer-bootstrap.js'), source);

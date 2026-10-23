@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Coordinate automatic anonymous identity across concurrently starting windows and retain verified renderer identity updates in Main.
+
 - Add automatic Main + Preload setup with a packaged browser runtime; no renderer initialization or host-side DOM adapters required.
 - Add trusted-frame initialization handshake, ready-client retrieval and serializable route/window policies while retaining manual APIs.
 - Verify automatic collection under strict CSP, native Google callbacks, untrusted-window rejection and reload identity in real sandboxed Electron.

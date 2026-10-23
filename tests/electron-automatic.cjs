@@ -20,7 +20,7 @@ const deadline = setTimeout(() => {
 app
   .whenReady()
   .then(async () => {
-    let telemetry, main, denied;
+    let telemetry, main, sibling, denied;
     try {
       // Given only Main configuration and one preload installation; no renderer setup or imports.
     assert.throws(() => installGoogleAnalytics({measurementId: id}), /Provide appOrigins/);
@@ -57,7 +57,8 @@ app
         show: false,
         webPreferences: { preload, sandbox: true, contextIsolation: true },
       });
-      await main.loadURL('ga4test://desktop/');
+      sibling = new BrowserWindow({show: false, webPreferences: {preload, sandbox: true, contextIsolation: true}});
+    await Promise.all([main.loadURL('ga4test://desktop/'), sibling.loadURL('ga4test://desktop/')]);
       assert.equal(
         await main.webContents.executeJavaScript(
           'window.electronGoogleTag.ready()',
@@ -71,6 +72,14 @@ app
       gtag('get',${JSON.stringify(id)},'client_id',cid=>gtag('get',${JSON.stringify(id)},'session_id',sid=>{clearTimeout(timer);resolve({cid,sid})}));
     })`);
       const before = await identity();
+    assert.equal(await sibling.webContents.executeJavaScript('window.electronGoogleTag.ready()'), id);
+    const siblingId = await sibling.webContents.executeJavaScript(`new Promise(resolve => gtag('get', ${JSON.stringify(id)}, 'client_id', resolve))`);
+    assert.equal(siblingId, before.cid);
+    for (const window of [main, sibling]) {
+      const configuredId = await window.webContents.executeJavaScript(`window.dataLayer.find(args=>args[0]==='config' && args[1]===${JSON.stringify(id)})[2].client_id`);
+      assert.equal(configuredId, before.cid);
+      assert.equal(await window.webContents.executeJavaScript(`localStorage.getItem('electron-ga4:'+${JSON.stringify(id)}+':client-id')`), before.cid);
+    }
       assert.match(before.cid, /^\d+\.\d+$/);
       assert.ok(Number(before.sid) > 0);
       // When navigation, a real inner-pane scroll and an untrusted window occur.
@@ -121,14 +130,14 @@ app
       // Then native identity/session persist and only the trusted application initializes.
       assert.deepEqual(await identity(), before);
       console.log(
-        'PASS: Main + one preload call, automatic renderer and native Google callbacks, default HTTPS origin, sanitized routes, default scroll, untrusted rejection, reload identity',
+        'PASS: Main + one preload call, automatic renderer and native Google callbacks, default HTTPS origin, sanitized routes, default scroll, untrusted rejection, reload identity, concurrent-window identity',
       );
     } catch (error) {
       console.error(error);
       process.exitCode = 1;
     } finally {
       telemetry?.dispose();
-      for (const window of [main, denied])
+      for (const window of [main, sibling, denied])
         if (window && !window.isDestroyed()) window.destroy();
       app.quit();
     }

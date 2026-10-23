@@ -48,6 +48,8 @@ export function createGoogleTagTransport(options: GoogleTagTransportOptions) {
   const collectorSession = session.fromPartition(partition);
   let disposed = false;
   let collectionEnabled = true;
+  const rendererIdentityKeys = new Map<number, string>();
+  const sharedIdentities = new Map<string, string>();
   let suspended = false;
   let locked = false;
   const html = `<!doctype html><meta charset="utf-8"><title>Electron GA4 transport</title>
@@ -146,9 +148,11 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
   function observeWindow(_event: Electron.Event | undefined, window: BrowserWindow) {
     if (window === collector || observedWindows.has(window)) return;
     observeDownloads(window.webContents);
+    const senderId = window.webContents.id;
     const onChange = () => {
       if (window.isDestroyed()) {
         observedWindows.delete(window);
+        rendererIdentityKeys.delete(senderId);
       }
       void updateForeground();
     };
@@ -184,6 +188,11 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
       return null;
     }
     if (!collectionEnabled && args[0] === 'event') return null;
+    const identityKey = rendererIdentityKeys.get(event.sender.id);
+    if (identityKey && args[0] === 'config' && args[1] === id && args[2] && typeof args[2] === 'object') {
+      const clientId = (args[2] as Record<string, unknown>).client_id;
+      if (typeof clientId === 'string' && /^\d+\.\d+$/.test(clientId)) sharedIdentities.set(identityKey, clientId);
+    }
     const serialized = JSON.stringify(args);
     if (serialized.length > 256_000) throw new Error('Google tag command too large');
     await ready;
@@ -213,16 +222,26 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
   };
   ipcMain.handle(COMMAND, onCommand);
   let rendererRuntime: string | undefined;
-  ipcMain.handle(INITIALIZE, async event => {
-    if (disposed || !options.isAllowedSender(event.sender) || event.senderFrame !== event.sender.mainFrame)
-      throw new Error('Unauthorized Google tag initialization');
-    if (options.renderer === undefined || options.renderer === false) return null;
-    const renderer = typeof options.renderer === 'function' ? options.renderer(event.sender) : options.renderer;
-    if (renderer === false) return null;
-    rendererRuntime ??= readFileSync(join(__dirname, 'renderer-bootstrap.js'), 'utf8');
-    const configuration = { pageLocation: `${origin.origin}/`, ...renderer, measurementId: id };
-    // Execute in the validated requesting frame, never a newly navigated remote page.
-    return event.senderFrame!.executeJavaScript(`${rendererRuntime}(${JSON.stringify(configuration)})`);
+  let initialization: Promise<unknown> = Promise.resolve();
+  ipcMain.handle(INITIALIZE, event => {
+    const result = initialization.then(async () => {
+      if (disposed || !options.isAllowedSender(event.sender) || event.senderFrame !== event.sender.mainFrame)
+        throw new Error('Unauthorized Google tag initialization');
+      if (options.renderer === undefined || options.renderer === false) return null;
+      const renderer = typeof options.renderer === 'function' ? options.renderer(event.sender) : options.renderer;
+      if (renderer === false) return null;
+      rendererRuntime ??= readFileSync(join(__dirname, 'renderer-bootstrap.js'), 'utf8');
+      const identityKey = renderer.clientIdStorageKey === false ? undefined : renderer.clientIdStorageKey ?? `electron-ga4:${id}:client-id`;
+      if (identityKey) rendererIdentityKeys.set(event.sender.id, identityKey);
+      const clientId = renderer.clientId ?? (identityKey ? sharedIdentities.get(identityKey) : undefined);
+      const configuration = { pageLocation: `${origin.origin}/`, ...renderer, ...(clientId ? { clientId } : {}), measurementId: id };
+      // Serialize first-window identity creation, then inject the canonical ID into sibling windows.
+      const initialized = await event.senderFrame!.executeJavaScript(`${rendererRuntime}(${JSON.stringify(configuration)})`) as { measurementId: string; clientId?: string } | null;
+      if (identityKey && initialized?.clientId && /^\d+\.\d+$/.test(initialized.clientId)) sharedIdentities.set(identityKey, initialized.clientId);
+      return initialized?.measurementId ?? null;
+    });
+    initialization = result.catch(() => undefined);
+    return result;
   });
 
   app.once('will-quit', dispose);
@@ -236,6 +255,8 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
     app.removeListener('browser-window-created', observeWindow);
     for (const remove of observedWindows.values()) remove();
     observedWindows.clear();
+    rendererIdentityKeys.clear();
+    sharedIdentities.clear();
     for (const remove of observedSessions.values()) remove();
     observedSessions.clear();
     powerMonitor.removeListener('suspend', onSuspend);

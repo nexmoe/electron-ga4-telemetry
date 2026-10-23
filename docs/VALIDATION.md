@@ -46,6 +46,8 @@ YouTube 的官方 API 与真实 embed 能加载，已按官方契约安装监听
 `tests/electron-automatic.cjs` 只配置 Main 和已有 Preload，没有 Renderer 初始化、业务入口或
 额外加载器。真实沙箱 Electron、自定义协议、`script-src 'none'` 下已确认自动初始化、原生
 Google client/session 回调、默认内部滚动、固定路由映射、不可信窗口拒绝及重载身份保持。
+真实 Viora 发现首次双窗口生成不同匿名 ID 的竞态；Main 已按身份存储键串行协调并复用 ID，
+同时跟随可信 renderer 的身份更新。新增并发双窗口的公开 config、存储与原生 Google ID 一致性验收。
 验收只读取可序列化的事件，避免把原生回调函数跨进程返回误报为产品故障。
 
 33 项库内快速契约测试通过。`dist/desktop.js` / `dist/gtag.js` 分支覆盖率合计 73.33%，
