@@ -1,0 +1,98 @@
+{
+  "name": "electron-ga4-telemetry",
+  "version": "0.3.0",
+  "description": "Official gtag.js plus an isolated HTTPS transport, native GA4 metrics and optional Electron telemetry.",
+  "license": "MIT",
+  "main": "dist/gtag.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "pnpm run build && node --test tests/*.test.cjs",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "prepack": "pnpm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "electron": "^38.0.0",
+    "typescript": "^5.0.0",
+    "happy-dom": "20.14.5"
+  },
+  "types": "dist/gtag.d.ts",
+  "exports": {
+    "./main": {
+      "types": "./dist/main.d.ts",
+      "require": "./dist/main.js",
+      "default": "./dist/main.js"
+    },
+    "./preload": {
+      "types": "./dist/preload.d.ts",
+      "require": "./dist/preload.js",
+      "default": "./dist/preload.js"
+    },
+    "./renderer": {
+      "types": "./dist/renderer.d.ts",
+      "require": "./dist/renderer.js",
+      "default": "./dist/renderer.js"
+    },
+    "./shared": {
+      "types": "./dist/shared.d.ts",
+      "require": "./dist/shared.js",
+      "default": "./dist/shared.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "require": "./dist/core.js",
+      "default": "./dist/core.js"
+    },
+    "./ga4-web": {
+      "types": "./dist/ga4-web.d.ts",
+      "require": "./dist/ga4-web.js",
+      "default": "./dist/ga4-web.js"
+    },
+    "./gtag": {
+      "types": "./dist/gtag.d.ts",
+      "require": "./dist/gtag.js",
+      "default": "./dist/gtag.js"
+    },
+    "./transport": {
+      "types": "./dist/transport.d.ts",
+      "require": "./dist/transport.js",
+      "default": "./dist/transport.js"
+    },
+    "./transport-preload": {
+      "types": "./dist/transport-preload.d.ts",
+      "require": "./dist/transport-preload.js",
+      "default": "./dist/transport-preload.js"
+    },
+    ".": {
+      "types": "./dist/gtag.d.ts",
+      "require": "./dist/gtag.js",
+      "default": "./dist/gtag.js"
+    }
+  },
+  "packageManager": "pnpm@11.1.2",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nexmoe/electron-ga4-telemetry.git"
+  },
+  "homepage": "https://github.com/nexmoe/electron-ga4-telemetry#readme",
+  "files": [
+    "dist",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "docs",
+    "examples",
+    "CHANGELOG.md"
+  ],
+  "peerDependencies": {
+    "electron": ">=38"
+  },
+  "peerDependenciesMeta": {
+    "electron": {
+      "optional": true
+    }
+  }
+}
