@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update development dependencies to Electron 45, TypeScript 7 and happy-dom 21, retain Node 22 types and Electron >=38 peer compatibility, and migrate the compiler to Node16 module resolution.
+
 - Persist automatic installation identity atomically in Main, migrate existing renderer IDs, and retain one identity across stale/blocked storage, sibling windows and application restarts.
 - Recover the collector renderer after crashes with bounded backoff, restoring consent/configuration without replaying business events or extra page views; expose non-fatal errors and operational diagnostics.
 - Add real offline Electron acceptance for an actual collector crash and full-process restart with a different first window.
