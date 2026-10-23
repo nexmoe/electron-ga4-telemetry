@@ -1,6 +1,13 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { DesktopGoogleAnalyticsOptions } from './desktop';
 import { app, BrowserWindow, ipcMain, powerMonitor, session, shell, type Session, type DownloadItem, type WebContents } from 'electron';
 
 const COMMAND = 'electron-ga4:command';
+const INITIALIZE = 'electron-ga4:initialize';
+
+export type AutoRendererOptions = Omit<DesktopGoogleAnalyticsOptions, 'measurementId' | 'pageLocation' | 'mapRoute'> & { pageLocation?: string };
+type RendererSetup = AutoRendererOptions | false | ((sender: WebContents) => AutoRendererOptions | false);
 const CALLBACK_MARKER = '__electron_ga4_callback__';
 
 export interface GoogleTagTransportOptions {
@@ -15,6 +22,8 @@ export interface GoogleTagTransportOptions {
   additionalAllowedOrigins?: string[];
   /** Observe trusted app DownloadItems by default; set false to disable. */
   nativeDownloads?: boolean;
+  /** Opt into automatic renderer setup. installGoogleAnalytics enables it by default. */
+  renderer?: RendererSetup;
 }
 
 /**
@@ -203,6 +212,18 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
     })()`);
   };
   ipcMain.handle(COMMAND, onCommand);
+  let rendererRuntime: string | undefined;
+  ipcMain.handle(INITIALIZE, async event => {
+    if (disposed || !options.isAllowedSender(event.sender) || event.senderFrame !== event.sender.mainFrame)
+      throw new Error('Unauthorized Google tag initialization');
+    if (options.renderer === undefined || options.renderer === false) return null;
+    const renderer = typeof options.renderer === 'function' ? options.renderer(event.sender) : options.renderer;
+    if (renderer === false) return null;
+    rendererRuntime ??= readFileSync(join(__dirname, 'renderer-bootstrap.js'), 'utf8');
+    const configuration = { pageLocation: `${origin.origin}/`, ...renderer, measurementId: id };
+    // Execute in the validated requesting frame, never a newly navigated remote page.
+    return event.senderFrame!.executeJavaScript(`${rendererRuntime}(${JSON.stringify(configuration)})`);
+  });
 
   app.once('will-quit', dispose);
 
@@ -211,6 +232,7 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
     disposed = true;
     app.removeListener('will-quit', dispose);
     ipcMain.removeHandler(COMMAND);
+    ipcMain.removeHandler(INITIALIZE);
     app.removeListener('browser-window-created', observeWindow);
     for (const remove of observedWindows.values()) remove();
     observedWindows.clear();
@@ -226,4 +248,36 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
     collectorSession.protocol.unhandle('https');
   }
   return { ready, dispose, collector, recordExternalOpen, openExternal };
+}
+
+
+export interface InstallGoogleAnalyticsOptions extends Omit<GoogleTagTransportOptions, 'origin' | 'isAllowedSender'> {
+  /** Optional owned HTTPS collector origin; the default is served only inside the private session. */
+  origin?: string;
+  /** Explicitly trusted application document origins, e.g. app://desktop. No opaque/file origins. */
+  appOrigins?: string[];
+  /** Optional stricter application-window policy; combined with appOrigins when both are supplied. */
+  isAllowedSender?: (sender: WebContents) => boolean;
+}
+
+/** Main + one preload call: initialize the official tag and application DOM adapters automatically. */
+export function installGoogleAnalytics(options: InstallGoogleAnalyticsOptions) {
+  const origins = options.appOrigins?.map(value => {
+    const url = new URL(value);
+    if (!url.hostname || url.username || url.password || !['', '/'].includes(url.pathname) || url.search || url.hash)
+      throw new Error('appOrigins must contain clean, non-opaque application origins');
+    return `${url.protocol}//${url.host}`;
+  });
+  if (!origins?.length && !options.isAllowedSender) throw new Error('Provide appOrigins or isAllowedSender');
+  return createGoogleTagTransport({
+    ...options,
+    origin: options.origin ?? 'https://electron-ga4.invalid',
+    renderer: options.renderer === undefined ? {} : options.renderer,
+    isAllowedSender: sender => {
+      if (options.isAllowedSender && !options.isAllowedSender(sender)) return false;
+      if (!origins) return true;
+      try { const url = new URL(sender.getURL()); return origins.includes(`${url.protocol}//${url.host}`); }
+      catch { return false; }
+    },
+  });
 }

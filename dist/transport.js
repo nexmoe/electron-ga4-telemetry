@@ -1,8 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createGoogleTagTransport = createGoogleTagTransport;
+exports.installGoogleAnalytics = installGoogleAnalytics;
+const node_fs_1 = require("node:fs");
+const node_path_1 = require("node:path");
 const electron_1 = require("electron");
 const COMMAND = 'electron-ga4:command';
+const INITIALIZE = 'electron-ga4:initialize';
 const CALLBACK_MARKER = '__electron_ga4_callback__';
 /**
  * Run the unmodified official tag on HTTPS, independently of the app's custom protocol.
@@ -207,6 +211,20 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
     })()`);
     };
     electron_1.ipcMain.handle(COMMAND, onCommand);
+    let rendererRuntime;
+    electron_1.ipcMain.handle(INITIALIZE, async (event) => {
+        if (disposed || !options.isAllowedSender(event.sender) || event.senderFrame !== event.sender.mainFrame)
+            throw new Error('Unauthorized Google tag initialization');
+        if (options.renderer === undefined || options.renderer === false)
+            return null;
+        const renderer = typeof options.renderer === 'function' ? options.renderer(event.sender) : options.renderer;
+        if (renderer === false)
+            return null;
+        rendererRuntime ??= (0, node_fs_1.readFileSync)((0, node_path_1.join)(__dirname, 'renderer-bootstrap.js'), 'utf8');
+        const configuration = { pageLocation: `${origin.origin}/`, ...renderer, measurementId: id };
+        // Execute in the validated requesting frame, never a newly navigated remote page.
+        return event.senderFrame.executeJavaScript(`${rendererRuntime}(${JSON.stringify(configuration)})`);
+    });
     electron_1.app.once('will-quit', dispose);
     function dispose() {
         if (disposed)
@@ -214,6 +232,7 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
         disposed = true;
         electron_1.app.removeListener('will-quit', dispose);
         electron_1.ipcMain.removeHandler(COMMAND);
+        electron_1.ipcMain.removeHandler(INITIALIZE);
         electron_1.app.removeListener('browser-window-created', observeWindow);
         for (const remove of observedWindows.values())
             remove();
@@ -232,4 +251,33 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
         collectorSession.protocol.unhandle('https');
     }
     return { ready, dispose, collector, recordExternalOpen, openExternal };
+}
+/** Main + one preload call: initialize the official tag and application DOM adapters automatically. */
+function installGoogleAnalytics(options) {
+    const origins = options.appOrigins?.map(value => {
+        const url = new URL(value);
+        if (!url.hostname || url.username || url.password || !['', '/'].includes(url.pathname) || url.search || url.hash)
+            throw new Error('appOrigins must contain clean, non-opaque application origins');
+        return `${url.protocol}//${url.host}`;
+    });
+    if (!origins?.length && !options.isAllowedSender)
+        throw new Error('Provide appOrigins or isAllowedSender');
+    return createGoogleTagTransport({
+        ...options,
+        origin: options.origin ?? 'https://electron-ga4.invalid',
+        renderer: options.renderer === undefined ? {} : options.renderer,
+        isAllowedSender: sender => {
+            if (options.isAllowedSender && !options.isAllowedSender(sender))
+                return false;
+            if (!origins)
+                return true;
+            try {
+                const url = new URL(sender.getURL());
+                return origins.includes(`${url.protocol}//${url.host}`);
+            }
+            catch {
+                return false;
+            }
+        },
+    });
 }

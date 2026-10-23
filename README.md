@@ -10,50 +10,63 @@ pnpm add github:nexmoe/electron-ga4-telemetry#v0.3.0
 
 Compiled CommonJS and TypeScript declarations are included. Pin a tag or commit. Electron is an optional peer; browser-only consumers can import `/gtag` without loading Electron.
 
-## Electron applications using custom protocols
+## Automatic Electron setup
 
-The official tag currently aborts GA4 collection on documents outside HTTP/HTTPS. A virtual `page_location` does not change this. Run the unmodified tag on a dedicated, locally served HTTPS page while your application keeps its own origin and storage.
+Two integration points are sufficient; no renderer import, initialization or DOM adapter code is required:
 
 ```ts
-// Main, after app.whenReady(), when analytics is enabled:
-import { createGoogleTagTransport } from 'electron-ga4-telemetry/transport';
-const transport = createGoogleTagTransport({
+// Main, after app.whenReady(), before creating application windows:
+import { installGoogleAnalytics } from 'electron-ga4-telemetry/transport';
+const analytics = installGoogleAnalytics({
   measurementId: 'G-XXXXXXXXXX',
-  origin: 'https://desktop.example.com', // an origin you control; its page is served locally
-  isAllowedSender: sender => trustedApplicationWebContents.has(sender.id),
+  appOrigins: ['app://desktop'], // explicitly trusted application documents
 });
 
-// Add to your existing preload. Bundle this entry when using sandboxed preload.
+// Add this to your existing preload and bundle the import for a sandboxed preload:
 import { installGoogleTagPreload } from 'electron-ga4-telemetry/transport-preload';
 installGoogleTagPreload();
-
-// Renderer: singleton, anonymous identity storage and enhanced defaults are included.
-import { getDesktopGoogleAnalytics } from 'electron-ga4-telemetry/desktop';
-const analytics = getDesktopGoogleAnalytics({
-  measurementId: 'G-XXXXXXXXXX',
-  pageLocation: 'https://desktop.example.com/',
-  pageTitle: 'Desktop',
-  enabled: analyticsConsent,
-  // privacy: 'redacted', // optional: origin-only URLs and marked forms/videos
-});
-analytics.initialize();
-analytics.track('tutorial_complete');
-analytics.gtag('get', 'G-XXXXXXXXXX', 'session_id', console.log);
-analytics.gtag('event', 'purchase', {
-  transaction_id: 'public_order_id', currency: 'USD', value: 10,
-  items: [{ item_id: 'pro', item_name: 'Pro plan', price: 10, quantity: 1 }],
-});
-analytics.setClientId(verifiedWebClientId); // optional browser-to-app handoff
-analytics.setEnabled(false);
 ```
 
-`gtag(...args)` forwards the native `config`, `set`, `get`, `event`, `consent` and `js` commands, nested parameters and callbacks. `config` accepts official tag settings. Native GA4 first-visit, session and engagement processing stays in Google's script. The native client does not inject consent or advertising-signal settings. Pass `consent` and official `config` values when the application wants to own those policies. SDK pause/resume does not grant or withdraw consent; use native consent commands for that.
+The library initializes one renderer client per window/stream, persists anonymous identity, sends the initial PV, and observes sanitized History changes and enhanced DOM events. It runs the unmodified official tag on a locally served HTTPS collector with its own persistent session, while your application's origin and storage stay unchanged. The default collector origin is `https://electron-ga4.invalid`; optionally provide an owned `origin`. No network request is made to that collector page. Native collection traffic still goes to Google.
 
-`/desktop` enables collection unless `enabled: false` is supplied. It does not inject consent or advertising policy. Calls for the same window/measurement ID reuse one client, even across module reloads; the first call owns configuration. `destroy()` unregisters it. Identity is created lazily on initialization, retained under `electron-ga4:<MEASUREMENT_ID>:client-id`, and updated by `setClientId()`. Set `clientIdStorageKey` to an existing app key for a migration, or `false` to retain Google's identity management; blocked storage falls back to memory. Enhanced defaults are merged with your individual overrides, so `{ forms: false }` does not disable other adapters.
+Only explicitly trusted top-level frames may initialize or send commands. For stricter window policy, supply `isAllowedSender` (combined with `appOrigins` when both are provided). `file://` and other opaque origins are not accepted by `appOrigins`; use an explicit window/URL validator if needed. Initialization executes the packaged static browser runtime in the validated frame; it does not add `unsafe-eval` or weaken the app's CSP. Disposal is automatic on app exit.
 
-The lower-level `GoogleAnalyticsClient` in `/gtag` remains available; its consent, enabled and identity defaults are unchanged.
+The automatic entry enables collection by default and preserves native consent/advertising defaults. Supply `renderer` settings for your application's policy:
 
-The transport uses its own persistent Electron session. Only allowlisted main frames may issue commands; the collector has no Node access or application preload. Foreground visibility follows trusted application windows rather than the invisible collector, and becomes hidden during system suspend or screen lock. It automatically disposes on `will-quit`; call `dispose()` for earlier teardown.
+```ts
+const analytics = installGoogleAnalytics({
+  measurementId: 'G-XXXXXXXXXX',
+  appOrigins: ['app://desktop'],
+  renderer: {
+    privacy: 'redacted',
+    clientIdStorageKey: 'existing-app-client-id', // optional identity migration
+    routes: { '/': 'home', '/notes/new': 'notes/new', '/notes/*': 'notes/editor' },
+    consent: { analytics_storage: 'granted', ad_storage: 'denied' },
+  },
+});
+```
+
+`routes` contains fixed screen labels. Exact paths beat trailing `*` patterns, the longest matching prefix wins, and unknown paths are omitted. Alternatively, keep the lower-level renderer API for function-based route mapping. `renderer` may be a function of the trusted sender to choose per-window settings, for example `sendPageView: false, autoPageViews: false` for auxiliary windows; returning `false` skips initialization for that window. `renderer: { enabled: false }` does not create an identity or configure a tag in the page. Initial settings must be JSON-serializable; native callbacks remain available after initialization.
+
+Ordinary events and interactions work without renderer setup. For business events, identity handoff or native commands, wait for the prepared client:
+
+```ts
+import { getAutoGoogleAnalytics } from 'electron-ga4-telemetry/desktop';
+const analytics = await getAutoGoogleAnalytics(); // null if disabled/unavailable/untrusted
+analytics?.track('tutorial_complete');
+analytics?.gtag('get', 'G-XXXXXXXXXX', 'session_id', console.log);
+analytics?.setClientId(verifiedWebClientId);
+```
+
+This waits for Preload/Main initialization, so early business events do not race the initial config. Raw `window.gtag` is also available after `await window.electronGoogleTag.ready()`. An application without automatic setup returns `null` rather than breaking its business flow. Remote frames and third-party pages must never be added to your application's trust policy casually.
+
+## Lower-level integration
+
+Existing `createGoogleTagTransport`, `installGoogleTagPreload` and `GoogleAnalyticsClient` / `getDesktopGoogleAnalytics` remain available. `createGoogleTagTransport` does not automatically initialize renderers unless `renderer` settings are provided. `installGoogleTagPreload({ autoInitialize: false })` disables its initialization request for fully manual integrations.
+
+The `/desktop` factory owns a per-window/stream singleton including module reloads; the first call owns configuration and `destroy()` unregisters it. Anonymous identity is created lazily and stored under `electron-ga4:<MEASUREMENT_ID>:client-id`; use a legacy `clientIdStorageKey` to migrate, or `false` to let Google own identity. Blocked storage falls back to memory. Enhanced defaults merge with individual overrides, so `{ forms: false }` retains other adapters.
+
+The lower-level `/gtag` client keeps its original enabled/identity defaults and forwards native `config`, `set`, `get`, `event`, `consent` and `js`, nested parameters and callbacks. SDK pause/resume does not grant or withdraw native consent. The official tag remains responsible for first-visit, sessions and engagement; no equivalent synthetic events are manufactured.
 
 ## Automatic events and boundaries
 
@@ -94,6 +107,7 @@ pnpm run check
 pnpm test
 pnpm pack
 # Explicit real-Google acceptance (requires a locally installed Electron binary):
+GA4_MEASUREMENT_ID=G-XXXXXXXXXX pnpm exec electron tests/electron-automatic.cjs
 GA4_MEASUREMENT_ID=G-XXXXXXXXXX pnpm exec electron tests/electron-transport.cjs
 # Optional real YouTube playback; exit 2 means sign-in/playback blocked, not passed:
 GA4_MEASUREMENT_ID=G-XXXXXXXXXX pnpm exec electron tests/electron-youtube.cjs

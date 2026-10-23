@@ -1,6 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getDesktopGoogleAnalytics = getDesktopGoogleAnalytics;
+exports.resolveAnalyticsRoute = resolveAnalyticsRoute;
+exports.getAutoGoogleAnalytics = getAutoGoogleAnalytics;
 const gtag_1 = require("./gtag");
 const CLIENTS = Symbol.for('electron-ga4.desktop.clients');
 class DesktopClient extends gtag_1.GoogleAnalyticsClient {
@@ -29,6 +31,10 @@ function getDesktopGoogleAnalytics(options) {
     const client = new DesktopClient({
         ...options,
         enabled: options.enabled ?? true,
+        mapRoute: options.mapRoute ??
+            (options.routes
+                ? (path) => resolveAnalyticsRoute(path, options.routes)
+                : undefined),
         clientIdStorageKey: options.clientIdStorageKey ?? `electron-ga4:${id}:client-id`,
         enhancedMeasurement: options.enhancedMeasurement === false
             ? false
@@ -51,4 +57,31 @@ function getDesktopGoogleAnalytics(options) {
     });
     clients.set(id, client);
     return client;
+}
+/** Resolve fixed route labels without serializing functions across Electron processes. */
+function resolveAnalyticsRoute(path, routes) {
+    if (Object.prototype.hasOwnProperty.call(routes, path))
+        return routes[path];
+    const pattern = Object.keys(routes)
+        .filter((key) => key.endsWith('*') && path.startsWith(key.slice(0, -1)))
+        .sort((a, b) => b.length - a.length)[0];
+    return pattern ? routes[pattern] : null;
+}
+/** Wait for Main/Preload automatic setup. A disabled or unavailable transport returns null. */
+async function getAutoGoogleAnalytics(measurementId) {
+    const target = window;
+    let id = measurementId?.toUpperCase();
+    if (target.electronGoogleTag?.ready) {
+        let configured;
+        try {
+            configured = await target.electronGoogleTag.ready();
+        }
+        catch {
+            return null;
+        }
+        if (!configured || (id && id !== configured))
+            return null;
+        id = configured;
+    }
+    return id ? (target[CLIENTS]?.get(id) ?? null) : null;
 }

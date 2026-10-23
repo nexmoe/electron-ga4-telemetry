@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add automatic Main + Preload setup with a packaged browser runtime; no renderer initialization or host-side DOM adapters required.
+- Add trusted-frame initialization handshake, ready-client retrieval and serializable route/window policies while retaining manual APIs.
+- Verify automatic collection under strict CSP, native Google callbacks, untrusted-window rejection and reload identity in real sandboxed Electron.
+
 - Add `/desktop` quick setup with a per-window/stream singleton, lazy anonymous identity persistence, legacy storage-key migration and merged enhanced-measurement defaults.
 - Add `transport.openExternal()` and automatic transport teardown on app exit; observe trusted-window downloads by default with an explicit opt-out.
 - Keep low-level `/gtag` defaults and application-owned consent, advertising and business policies intact.

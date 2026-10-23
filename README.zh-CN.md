@@ -11,38 +11,59 @@
 桥接增强层补充文档/内部容器 90% 滚动、完整外链与下载元数据、普通表单、HTML5 视频和 URL 查询参数搜索。`enhancedMeasurement.privacy='redacted'` 则保留 origin-only 外链、表单/视频标记和搜索词审批策略；旧 `/renderer` 的隐私过滤继续保留。`additionalAllowedOrigins` 可显式允许经过校验的 HTTPS 自建采集域名，不移除 CSP 白名单。新增 `youtubeVideo` 适配启用 JS API 的 YouTube iframe；宿主须允许官方脚本/frame CSP 并提供有效 HTTP Referer，脱敏模式还须标记 `data-ga4-video`。主进程与 `/desktop` 快捷入口默认启用下载适配；底层渲染器同时启用 `nativeDownloads` 和 `fileDownloads` 后，可观察真实 Electron 下载；成功调用 `shell.openExternal` 后用 `transport.recordExternalOpen(sender, url)` 记录原生外链。相同 URL 的 DOM/原生事件在 1.5 秒内去重，下载只记录开始、不上传本地保存路径。
 
 
-## 精简桌面接入
-
-Main 仍调用 `createGoogleTagTransport({ measurementId, origin, isAllowedSender })`，已有 Preload
-只需调用 `installGoogleTagPreload()`。Renderer 推荐使用新的快捷入口：
+## 自动接入：Main + Preload 两处
 
 ```ts
-import { getDesktopGoogleAnalytics } from 'electron-ga4-telemetry/desktop';
-
-const analytics = getDesktopGoogleAnalytics({
+// Main：app.whenReady() 后、创建窗口前
+import { installGoogleAnalytics } from 'electron-ga4-telemetry/transport';
+const analytics = installGoogleAnalytics({
   measurementId: 'G-XXXXXXXXXX',
-  pageLocation: 'https://desktop.example.com/',
-  // enabled: analyticsConsent,
-  // privacy: 'redacted',
-  // clientIdStorageKey: 'existing-app-client-id',
+  appOrigins: ['app://desktop'], // 明确允许的应用页面
 });
-analytics.initialize();
-analytics.track('tutorial_complete');
-analytics.setClientId(verifiedWebClientId); // 自动持久化已验证的匿名身份
+
+// 合并到已有 Preload；沙箱 Preload 须把该导入打包进去
+import { installGoogleTagPreload } from 'electron-ga4-telemetry/transport-preload';
+installGoogleTagPreload();
 ```
 
-快捷入口默认启用采集，不注入 consent 或广告策略。默认开启桌面增强适配；只传
-`privacy: 'redacted'` 即可切换脱敏策略，`enhancedMeasurement: { forms: false }`
-只关闭表单，其他默认适配保留。业务事件、路由脱敏、辅助窗口的 PV 和同意策略仍由宿主决定。
+Renderer 不需要导入、初始化或编写通用采集适配。库自动处理匿名身份、首次 PV、脱敏路由、
+滚动、外链、下载、表单和视频适配；Google 原生脚本仍负责首次访问、会话和参与度。
+默认 collector 为专用 session 内本地提供的 `https://electron-ga4.invalid`，也可指定自有
+HTTPS `origin`。不迁移应用原来的协议和存储。
 
-同一窗口、同一 Measurement ID 复用一个实例，跨模块重载也不会重复初始化；首次配置生效，
-后续变更通过客户端方法完成，`destroy()` 后可重新创建。匿名 ID 在初始化时才创建，默认键为
-`electron-ga4:<MEASUREMENT_ID>:client-id`；指定旧存储键可无缝迁移，设置 `false` 则交给 Google
-管理身份。存储受限时退回进程内身份；此时不承诺重启后身份保持。
+自动入口默认启用采集，不擅自设置 consent 或广告策略。通过 Main 的 `renderer` 统一选择：
 
-transport 默认观察可信窗口的真实下载，自动在 `will-quit` 清理。原生外链使用
-`await transport.openExternal(sender, url)`，库在系统打开成功后记录；已有外链封装仍可继续调用
-`recordExternalOpen`。底层 `/gtag` 的原有默认行为不变。
+```ts
+renderer: {
+  privacy: 'redacted',
+  clientIdStorageKey: 'existing-app-client-id',
+  routes: { '/': 'home', '/notes/new': 'notes/new', '/notes/*': 'notes/editor' },
+  consent: { analytics_storage: 'granted', ad_storage: 'denied' },
+}
+```
+
+路由只输出固定标签，精确路径优先于末尾 `*`，多个通配按最长前缀匹配，未批准路径不上报。
+`renderer` 也可按可信 sender 返回配置：辅助窗口可关闭 `sendPageView`、`autoPageViews`；
+返回 `false` 完全跳过该窗口。初始配置必须能 JSON 序列化，函数路由仍使用底层手动入口。
+
+业务埋点只需获取已就绪的客户端，启动时调用也会等待配置完成：
+
+```ts
+import { getAutoGoogleAnalytics } from 'electron-ga4-telemetry/desktop';
+const analytics = await getAutoGoogleAnalytics(); // 不可用或未启用时为 null
+analytics?.track('tutorial_complete');
+analytics?.setClientId(verifiedWebClientId); // 自动持久化已验证的匿名身份
+```
+
+`appOrigins` 拒绝不透明/file 来源；`isAllowedSender` 可进一步限制窗口，与 appOrigins 同时
+提供时取交集。初始化和命令都只接受可信顶层 frame；运行库内预编译脚本，不启用 unsafe-eval，
+不放宽 CSP。Preload 加载完成后可通过 `window.electronGoogleTag.ready()` 等待，再使用原生
+`window.gtag`。缺失 transport 时不会创建身份，也不阻塞业务。
+
+已有 `/desktop`、`/gtag` 手动 API 保留。`createGoogleTagTransport` 未传 renderer 配置时仍不
+自动初始化；`installGoogleTagPreload({ autoInitialize: false })` 可关闭初始化请求。
+匿名 ID 默认键为 `electron-ga4:<MEASUREMENT_ID>:client-id`，指定旧键可无缝迁移；存储受限时
+使用内存身份，不承诺重启保持。transport 自动清理和原生下载默认值不变。
 
 
 基于 **Google 官方 `gtag.js`** 的 Electron 主进程 + Preload + Renderer 指标封装。仅需要 Web Data Stream 的 `G-...` Measurement ID，**不需要 API Secret**。

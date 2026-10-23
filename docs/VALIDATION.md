@@ -41,6 +41,18 @@ YouTube 的官方 API 与真实 embed 能加载，已按官方契约安装监听
 命令兼容不等于 Google Ads/Floodlight、多 property 漏斗或全部 gtag 场景已经验证。
 15 个相关库契约测试及真实 Electron transport smoke 通过；未运行整个宿主仓库门禁。
 
+## 自动初始化验收（2026-10-23）
+
+`tests/electron-automatic.cjs` 只配置 Main 和已有 Preload，没有 Renderer 初始化、业务入口或
+额外加载器。真实沙箱 Electron、自定义协议、`script-src 'none'` 下已确认自动初始化、原生
+Google client/session 回调、默认内部滚动、固定路由映射、不可信窗口拒绝及重载身份保持。
+验收只读取可序列化的事件，避免把原生回调函数跨进程返回误报为产品故障。
+
+33 项库内快速契约测试通过。`dist/desktop.js` / `dist/gtag.js` 分支覆盖率合计 73.33%，
+自动握手与 preload 的真实 Electron 覆盖未合并进该数值，不代表整个库的覆盖率。
+自动初始化入口默认启用，consent/广告策略仍由宿主选择；初始配置通过可信 Main 注入，
+没有关闭 contextIsolation/sandbox 或添加 unsafe-eval。原有手动 API 保留。
+
 ## 桌面快捷入口验收（2026-10-23）
 
 新增 `/desktop` 统一单例、匿名 ID 持久化和增强采集默认值；旧存储键迁移、无权限存储降级、

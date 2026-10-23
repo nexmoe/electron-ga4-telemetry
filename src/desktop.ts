@@ -5,6 +5,8 @@ export interface DesktopGoogleAnalyticsOptions extends GoogleAnalyticsOptions {
   pageLocation: string;
   /** Defaults to native GA4 metadata. Redacted mode requires marked forms/videos. */
   privacy?: 'native' | 'redacted';
+  /** Serializable route policy: exact matches beat trailing * patterns; unknown paths are omitted. */
+  routes?: Record<string, string | null>;
 }
 
 const CLIENTS = Symbol.for('electron-ga4.desktop.clients');
@@ -42,6 +44,11 @@ export function getDesktopGoogleAnalytics(
     {
       ...options,
       enabled: options.enabled ?? true,
+      mapRoute:
+        options.mapRoute ??
+        (options.routes
+          ? (path) => resolveAnalyticsRoute(path, options.routes!)
+          : undefined),
       clientIdStorageKey:
         options.clientIdStorageKey ?? `electron-ga4:${id}:client-id`,
       enhancedMeasurement:
@@ -67,4 +74,37 @@ export function getDesktopGoogleAnalytics(
   );
   clients.set(id, client);
   return client;
+}
+
+/** Resolve fixed route labels without serializing functions across Electron processes. */
+export function resolveAnalyticsRoute(
+  path: string,
+  routes: Record<string, string | null>,
+): string | null {
+  if (Object.prototype.hasOwnProperty.call(routes, path)) return routes[path];
+  const pattern = Object.keys(routes)
+    .filter((key) => key.endsWith('*') && path.startsWith(key.slice(0, -1)))
+    .sort((a, b) => b.length - a.length)[0];
+  return pattern ? routes[pattern] : null;
+}
+
+/** Wait for Main/Preload automatic setup. A disabled or unavailable transport returns null. */
+export async function getAutoGoogleAnalytics(
+  measurementId?: string,
+): Promise<GoogleAnalyticsClient | null> {
+  const target = window as DesktopWindow & {
+    electronGoogleTag?: { ready?: () => Promise<string | null> };
+  };
+  let id = measurementId?.toUpperCase();
+  if (target.electronGoogleTag?.ready) {
+    let configured: string | null;
+    try {
+      configured = await target.electronGoogleTag.ready();
+    } catch {
+      return null;
+    }
+    if (!configured || (id && id !== configured)) return null;
+    id = configured;
+  }
+  return id ? (target[CLIENTS]?.get(id) ?? null) : null;
 }
