@@ -162,10 +162,19 @@ export class GoogleAnalyticsClient {
   }
 
   setClientId(clientId: string): boolean {
+    return this.applyClientId(clientId, true);
+  }
+
+  /** @internal Main synchronizes siblings without echoing another native config command. */
+  synchronizeClientId(clientId: string): boolean {
+    return this.applyClientId(clientId, false);
+  }
+
+  private applyClientId(clientId: string, configure: boolean): boolean {
     if (!/^\d+\.\d+$/.test(clientId)) return false;
     this.clientId = clientId;
     this.persistIdentity();
-    if (this.initialized && this.enabled) {
+    if (configure && this.initialized && this.enabled) {
       getOrCreateGoogleTag()('config', this.id, {
         client_id: clientId, update: true, send_page_view: false,
       });

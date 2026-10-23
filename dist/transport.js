@@ -4,6 +4,8 @@ exports.createGoogleTagTransport = createGoogleTagTransport;
 exports.installGoogleAnalytics = installGoogleAnalytics;
 const node_fs_1 = require("node:fs");
 const node_path_1 = require("node:path");
+const identity_1 = require("./identity");
+const tag_state_1 = require("./tag-state");
 const electron_1 = require("electron");
 const COMMAND = 'electron-ga4:command';
 const INITIALIZE = 'electron-ga4:initialize';
@@ -35,7 +37,24 @@ function createGoogleTagTransport(options) {
     let disposed = false;
     let collectionEnabled = true;
     const rendererIdentityKeys = new Map();
-    const sharedIdentities = new Map();
+    const identitySenders = new Map();
+    function report(code) {
+        const error = Object.assign(new Error(code), { code });
+        try {
+            options.onError?.(error);
+        }
+        catch { /* Host diagnostics must not break the application. */ }
+    }
+    const identities = new identity_1.IdentityStore((0, node_path_1.join)(electron_1.app.getPath('userData'), 'electron-ga4-identities'), JSON.stringify([id, partition]), () => report('IDENTITY_STORAGE_FAILED'));
+    const tagState = new tag_state_1.TagState();
+    let collectorStatus = 'loading';
+    let recoveryAttempts = 0;
+    let consecutiveRecoveryAttempts = 0;
+    let healthySince = Date.now();
+    let collectorGeneration = 0;
+    let recoveryTimer;
+    let cancelRecoveryDelay;
+    let recovery;
     let suspended = false;
     let locked = false;
     const html = `<!doctype html><meta charset="utf-8"><title>Electron GA4 transport</title>
@@ -79,9 +98,77 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
         if (new URL(url).origin !== origin.origin)
             event.preventDefault();
     });
-    const ready = collector.loadURL(`${origin.origin}/`);
+    const ready = collector.loadURL(`${origin.origin}/`).then(() => {
+        if (!disposed && collectorStatus === 'loading')
+            collectorStatus = 'ready';
+    }).catch(error => {
+        if (!disposed && collectorStatus === 'loading') {
+            collectorStatus = 'failed';
+            report('COLLECTOR_LOAD_FAILED');
+        }
+        throw error;
+    });
     // A network/CSP failure must not become an unhandled rejection in the host app.
     void ready.catch(() => undefined);
+    async function waitForCollector() {
+        if (recovery)
+            await recovery;
+        else
+            await ready;
+        if (disposed || collector.isDestroyed() || collectorStatus !== 'ready')
+            throw new Error('Google tag collector unavailable');
+    }
+    async function recoverCollector() {
+        collectorStatus = 'recovering';
+        while (!disposed && consecutiveRecoveryAttempts < 3) {
+            const delay = consecutiveRecoveryAttempts === 0 ? 0 : 250 * 4 ** (consecutiveRecoveryAttempts - 1);
+            consecutiveRecoveryAttempts++;
+            recoveryAttempts++;
+            if (delay)
+                await new Promise(resolve => {
+                    cancelRecoveryDelay = resolve;
+                    recoveryTimer = setTimeout(resolve, delay);
+                });
+            recoveryTimer = undefined;
+            cancelRecoveryDelay = undefined;
+            if (disposed || collector.isDestroyed())
+                return;
+            try {
+                const generation = collectorGeneration;
+                // loadURL creates a fresh renderer in the same persistent Electron session.
+                await collector.loadURL(`${origin.origin}/`);
+                if (disposed)
+                    return;
+                await collector.webContents.executeJavaScript(`(() => {
+          const commands = ${JSON.stringify(tagState.replay())};
+          for (const args of commands) {
+            if (args[0] === 'js') args[1] = new Date(args[1]);
+            window.gtag(...args);
+          }
+        })()`);
+                if (generation !== collectorGeneration)
+                    throw new Error('Collector crashed during recovery');
+                collectorStatus = 'ready';
+                healthySince = Date.now();
+                return;
+            }
+            catch { /* Retry within the consecutive-failure budget; never replay business events. */ }
+        }
+        if (!disposed) {
+            collectorStatus = 'failed';
+            report('COLLECTOR_RECOVERY_EXHAUSTED');
+        }
+    }
+    const onCollectorGone = () => {
+        collectorGeneration++;
+        if (disposed || recovery)
+            return;
+        if (collectorStatus === 'ready' && Date.now() - healthySince >= 60_000)
+            consecutiveRecoveryAttempts = 0;
+        recovery = recoverCollector().finally(() => { recovery = undefined; void updateForeground(); });
+        void recovery.catch(() => undefined);
+    };
+    collector.webContents.on('render-process-gone', onCollectorGone);
     let foregroundGeneration = 0;
     const observedWindows = new Map();
     async function updateForeground() {
@@ -89,7 +176,7 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
         if (disposed)
             return;
         try {
-            await ready;
+            await waitForCollector();
             if (disposed || generation !== foregroundGeneration)
                 return;
             const focused = electron_1.BrowserWindow.getFocusedWindow();
@@ -148,6 +235,7 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
             if (window.isDestroyed()) {
                 observedWindows.delete(window);
                 rendererIdentityKeys.delete(senderId);
+                identitySenders.delete(senderId);
             }
             void updateForeground();
         };
@@ -170,6 +258,26 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
     for (const window of electron_1.BrowserWindow.getAllWindows())
         observeWindow(undefined, window);
     void updateForeground();
+    let dispatchQueue = Promise.resolve();
+    function synchronizeIdentity(key, clientId) {
+        if (disposed || identities.get(key) === clientId)
+            return;
+        identities.set(key, clientId);
+        for (const [senderId, sender] of identitySenders) {
+            if (sender.isDestroyed() || !options.isAllowedSender(sender) || rendererIdentityKeys.get(senderId) !== key)
+                continue;
+            try {
+                // A frozen auxiliary renderer must not block the collector's command queue.
+                void sender.executeJavaScript(`(() => {
+          const client = window[Symbol.for('electron-ga4.desktop.clients')]?.get(${JSON.stringify(id)});
+          client?.synchronizeClientId(${JSON.stringify(clientId)});
+        })()`).catch(() => report('IDENTITY_SYNC_FAILED'));
+            }
+            catch {
+                report('IDENTITY_SYNC_FAILED');
+            }
+        }
+    }
     const onCommand = async (event, args) => {
         if (disposed || !options.isAllowedSender(event.sender) ||
             event.senderFrame !== event.sender.mainFrame)
@@ -185,19 +293,25 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
         }
         if (!collectionEnabled && args[0] === 'event')
             return null;
-        const identityKey = rendererIdentityKeys.get(event.sender.id);
-        if (identityKey && args[0] === 'config' && args[1] === id && args[2] && typeof args[2] === 'object') {
-            const clientId = args[2].client_id;
-            if (typeof clientId === 'string' && /^\d+\.\d+$/.test(clientId))
-                sharedIdentities.set(identityKey, clientId);
-        }
         const serialized = JSON.stringify(args);
         if (serialized.length > 256_000)
             throw new Error('Google tag command too large');
-        await ready;
-        if (disposed)
-            throw new Error('Google tag transport disposed');
-        return collector.webContents.executeJavaScript(`(() => {
+        const dispatch = dispatchQueue.then(async () => {
+            await waitForCollector();
+            if (disposed)
+                throw new Error('Google tag transport disposed');
+            if (!options.isAllowedSender(event.sender) || event.senderFrame !== event.sender.mainFrame)
+                throw new Error('Unauthorized Google tag request');
+            if (!collectionEnabled && args[0] === 'event')
+                return { response: Promise.resolve(null) };
+            const identityKey = rendererIdentityKeys.get(event.sender.id);
+            if (identityKey && args[0] === 'config' && args[1] === id && args[2] && typeof args[2] === 'object') {
+                const clientId = args[2].client_id;
+                if ((0, identity_1.isClientId)(clientId))
+                    synchronizeIdentity(identityKey, clientId);
+            }
+            tagState.remember(args);
+            const response = collector.webContents.executeJavaScript(`(() => {
       const args = ${serialized};
       let callbackPresent = false;
       let finish;
@@ -218,7 +332,13 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
       if (!callbackPresent) return null;
       const timer = setTimeout(() => finish(null), 10000);
       return response.finally(() => clearTimeout(timer));
-    })()`);
+      })()`);
+            void response.catch(() => undefined);
+            // Serialize dispatch, not callback completion: a slow get/event callback must not block events.
+            return { response };
+        });
+        dispatchQueue = dispatch.then(() => undefined, () => undefined);
+        return (await dispatch).response;
     };
     electron_1.ipcMain.handle(COMMAND, onCommand);
     let rendererRuntime;
@@ -234,14 +354,28 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
                 return null;
             rendererRuntime ??= (0, node_fs_1.readFileSync)((0, node_path_1.join)(__dirname, 'renderer-bootstrap.js'), 'utf8');
             const identityKey = renderer.clientIdStorageKey === false ? undefined : renderer.clientIdStorageKey ?? `electron-ga4:${id}:client-id`;
-            if (identityKey)
+            if (identityKey) {
                 rendererIdentityKeys.set(event.sender.id, identityKey);
-            const clientId = renderer.clientId ?? (identityKey ? sharedIdentities.get(identityKey) : undefined);
+                identitySenders.set(event.sender.id, event.sender);
+            }
+            let clientId = renderer.clientId;
+            if (identityKey)
+                clientId ??= identities.get(identityKey);
+            if (identityKey && renderer.enabled !== false) {
+                if (!clientId) {
+                    // Migrate an existing renderer ID before generating any new installation identity.
+                    const legacy = await event.senderFrame.executeJavaScript(`(() => {
+            try { return window.localStorage.getItem(${JSON.stringify(identityKey)}); }
+            catch { return null; }
+          })()`);
+                    clientId = identities.resolve(identityKey, legacy);
+                }
+                if ((0, identity_1.isClientId)(clientId))
+                    identities.set(identityKey, clientId);
+            }
             const configuration = { pageLocation: `${origin.origin}/`, ...renderer, ...(clientId ? { clientId } : {}), measurementId: id };
-            // Serialize first-window identity creation, then inject the canonical ID into sibling windows.
+            // Serialize migration/creation, then inject Main's durable ID into every window.
             const initialized = await event.senderFrame.executeJavaScript(`${rendererRuntime}(${JSON.stringify(configuration)})`);
-            if (identityKey && initialized?.clientId && /^\d+\.\d+$/.test(initialized.clientId))
-                sharedIdentities.set(identityKey, initialized.clientId);
             return initialized?.measurementId ?? null;
         });
         initialization = result.catch(() => undefined);
@@ -252,6 +386,11 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
         if (disposed)
             return;
         disposed = true;
+        collectorStatus = 'disposed';
+        if (recoveryTimer)
+            clearTimeout(recoveryTimer);
+        cancelRecoveryDelay?.();
+        collector.webContents.removeListener('render-process-gone', onCollectorGone);
         electron_1.app.removeListener('will-quit', dispose);
         electron_1.ipcMain.removeHandler(COMMAND);
         electron_1.ipcMain.removeHandler(INITIALIZE);
@@ -260,7 +399,7 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
             remove();
         observedWindows.clear();
         rendererIdentityKeys.clear();
-        sharedIdentities.clear();
+        identitySenders.clear();
         for (const remove of observedSessions.values())
             remove();
         observedSessions.clear();
@@ -274,7 +413,9 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
             collector.destroy();
         collectorSession.protocol.unhandle('https');
     }
-    return { ready, dispose, collector, recordExternalOpen, openExternal };
+    return { ready, dispose, collector, recordExternalOpen, openExternal,
+        diagnostics: () => ({ identityPersistence: identities.status, collectorStatus, recoveryAttempts }),
+    };
 }
 /** Main + one preload call: initialize the official tag and application DOM adapters automatically. */
 function installGoogleAnalytics(options) {

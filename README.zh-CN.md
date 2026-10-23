@@ -62,8 +62,24 @@ analytics?.setClientId(verifiedWebClientId); // 自动持久化已验证的匿�
 
 已有 `/desktop`、`/gtag` 手动 API 保留。`createGoogleTagTransport` 未传 renderer 配置时仍不
 自动初始化；`installGoogleTagPreload({ autoInitialize: false })` 可关闭初始化请求。
-匿名 ID 默认键为 `electron-ga4:<MEASUREMENT_ID>:client-id`，指定旧键可无缝迁移；存储受限时
-使用内存身份，不承诺重启保持。transport 自动清理和原生下载默认值不变。
+匿名 ID 默认键为 `electron-ga4:<MEASUREMENT_ID>:client-id`。自动入口现在由 Main 将身份持久化到
+`userData/electron-ga4-identities`，通过临时文件写入、flush 和原子替换避免覆盖时写坏已有 ID。
+首次启用时优先迁移 Renderer 旧键；之后以 Main 保存的 ID 为准，Renderer 存储缺失、受限或残留旧值
+都不会另建身份。`setClientId()` 同步持久化并更新其他窗口的客户端及存储，不额外产生 PV。
+生产升级需保持 `userData`、collector `partition` 和身份键稳定；假定应用使用一个拥有统计实例的 Main
+进程。清空整个应用数据仍会创建新的安装身份。
+
+采集窗口 Renderer 崩溃后，在同一持久化 session 内重载，恢复配置、全局设置和最新 consent；
+恢复配置关闭额外 PV，不重放购买、点击等事件或已完成回调。连续失败最多退避重试三次，健康运行一分钟
+后恢复重试额度，应用退出会取消重试。恢复期间的新命令等待就绪；崩溃时已发出的事件可能丢失，
+这不等于离线事件持久化或 Google 入库保证。
+
+Main 可传入 `onError(error)`，并调用 `analytics.diagnostics()` 查看身份是否持久化、采集窗口状态和累计
+恢复次数。文件写入失败会保留本次运行的内存 ID，并报告 `IDENTITY_STORAGE_FAILED`；此时不承诺下次重启
+保持身份。状态 `ready` 只表示本地命令队列可用，不表示 Google 已收到事件。
+
+指定 `clientIdStorageKey: false` 仍可完全交由 Google Cookie 管理身份；手动 `/desktop` 客户端保留 Renderer
+存储逻辑，Main 持久化仅适用于自动入口。transport 自动清理和原生下载默认值不变。
 
 
 基于 **Google 官方 `gtag.js`** 的 Electron 主进程 + Preload + Renderer 指标封装。仅需要 Web Data Stream 的 `G-...` Measurement ID，**不需要 API Secret**。

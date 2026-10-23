@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DesktopGoogleAnalyticsOptions } from './desktop';
+import { IdentityStore, isClientId } from './identity';
+import { TagState } from './tag-state';
 import { app, BrowserWindow, ipcMain, powerMonitor, session, shell, type Session, type DownloadItem, type WebContents } from 'electron';
 
 const COMMAND = 'electron-ga4:command';
@@ -9,6 +11,10 @@ const INITIALIZE = 'electron-ga4:initialize';
 export type AutoRendererOptions = Omit<DesktopGoogleAnalyticsOptions, 'measurementId' | 'pageLocation' | 'mapRoute'> & { pageLocation?: string };
 type RendererSetup = AutoRendererOptions | false | ((sender: WebContents) => AutoRendererOptions | false);
 const CALLBACK_MARKER = '__electron_ga4_callback__';
+
+export interface GoogleTagTransportError extends Error {
+  code: 'IDENTITY_STORAGE_FAILED' | 'IDENTITY_SYNC_FAILED' | 'COLLECTOR_LOAD_FAILED' | 'COLLECTOR_RECOVERY_EXHAUSTED';
+}
 
 export interface GoogleTagTransportOptions {
   measurementId: string;
@@ -24,6 +30,8 @@ export interface GoogleTagTransportOptions {
   nativeDownloads?: boolean;
   /** Opt into automatic renderer setup. installGoogleAnalytics enables it by default. */
   renderer?: RendererSetup;
+  /** Optional non-fatal diagnostics; messages exclude client IDs and user-data paths. */
+  onError?: (error: GoogleTagTransportError) => void;
 }
 
 /**
@@ -49,7 +57,22 @@ export function createGoogleTagTransport(options: GoogleTagTransportOptions) {
   let disposed = false;
   let collectionEnabled = true;
   const rendererIdentityKeys = new Map<number, string>();
-  const sharedIdentities = new Map<string, string>();
+  const identitySenders = new Map<number, WebContents>();
+  function report(code: GoogleTagTransportError['code']) {
+    const error = Object.assign(new Error(code), { code });
+    try { options.onError?.(error); } catch { /* Host diagnostics must not break the application. */ }
+  }
+  const identities = new IdentityStore(join(app.getPath('userData'), 'electron-ga4-identities'),
+    JSON.stringify([id, partition]), () => report('IDENTITY_STORAGE_FAILED'));
+  const tagState = new TagState();
+  let collectorStatus: 'loading' | 'ready' | 'recovering' | 'failed' | 'disposed' = 'loading';
+  let recoveryAttempts = 0;
+  let consecutiveRecoveryAttempts = 0;
+  let healthySince = Date.now();
+  let collectorGeneration = 0;
+  let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancelRecoveryDelay: (() => void) | undefined;
+  let recovery: Promise<void> | undefined;
   let suspended = false;
   let locked = false;
   const html = `<!doctype html><meta charset="utf-8"><title>Electron GA4 transport</title>
@@ -91,9 +114,62 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
   collector.webContents.on('will-navigate', (event, url) => {
     if (new URL(url).origin !== origin.origin) event.preventDefault();
   });
-  const ready = collector.loadURL(`${origin.origin}/`);
+  const ready = collector.loadURL(`${origin.origin}/`).then(() => {
+    if (!disposed && collectorStatus === 'loading') collectorStatus = 'ready';
+  }).catch(error => {
+    if (!disposed && collectorStatus === 'loading') { collectorStatus = 'failed'; report('COLLECTOR_LOAD_FAILED'); }
+    throw error;
+  });
   // A network/CSP failure must not become an unhandled rejection in the host app.
   void ready.catch(() => undefined);
+
+  async function waitForCollector() {
+    if (recovery) await recovery;
+    else await ready;
+    if (disposed || collector.isDestroyed() || collectorStatus !== 'ready') throw new Error('Google tag collector unavailable');
+  }
+
+  async function recoverCollector() {
+    collectorStatus = 'recovering';
+    while (!disposed && consecutiveRecoveryAttempts < 3) {
+      const delay = consecutiveRecoveryAttempts === 0 ? 0 : 250 * 4 ** (consecutiveRecoveryAttempts - 1);
+      consecutiveRecoveryAttempts++;
+      recoveryAttempts++;
+      if (delay) await new Promise<void>(resolve => {
+        cancelRecoveryDelay = resolve;
+        recoveryTimer = setTimeout(resolve, delay);
+      });
+      recoveryTimer = undefined;
+      cancelRecoveryDelay = undefined;
+      if (disposed || collector.isDestroyed()) return;
+      try {
+        const generation = collectorGeneration;
+        // loadURL creates a fresh renderer in the same persistent Electron session.
+        await collector.loadURL(`${origin.origin}/`);
+        if (disposed) return;
+        await collector.webContents.executeJavaScript(`(() => {
+          const commands = ${JSON.stringify(tagState.replay())};
+          for (const args of commands) {
+            if (args[0] === 'js') args[1] = new Date(args[1]);
+            window.gtag(...args);
+          }
+        })()`);
+        if (generation !== collectorGeneration) throw new Error('Collector crashed during recovery');
+        collectorStatus = 'ready';
+        healthySince = Date.now();
+        return;
+      } catch { /* Retry within the consecutive-failure budget; never replay business events. */ }
+    }
+    if (!disposed) { collectorStatus = 'failed'; report('COLLECTOR_RECOVERY_EXHAUSTED'); }
+  }
+  const onCollectorGone = () => {
+    collectorGeneration++;
+    if (disposed || recovery) return;
+    if (collectorStatus === 'ready' && Date.now() - healthySince >= 60_000) consecutiveRecoveryAttempts = 0;
+    recovery = recoverCollector().finally(() => { recovery = undefined; void updateForeground(); });
+    void recovery.catch(() => undefined);
+  };
+  collector.webContents.on('render-process-gone', onCollectorGone);
 
   let foregroundGeneration = 0;
   const observedWindows = new Map<BrowserWindow, () => void>();
@@ -101,7 +177,7 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
     const generation = ++foregroundGeneration;
     if (disposed) return;
     try {
-      await ready;
+      await waitForCollector();
       if (disposed || generation !== foregroundGeneration) return;
       const focused = BrowserWindow.getFocusedWindow();
       const active = Boolean(collectionEnabled && !suspended && !locked && focused && !focused.isDestroyed() && focused.isVisible() &&
@@ -153,6 +229,7 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
       if (window.isDestroyed()) {
         observedWindows.delete(window);
         rendererIdentityKeys.delete(senderId);
+        identitySenders.delete(senderId);
       }
       void updateForeground();
     };
@@ -175,6 +252,22 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
   for (const window of BrowserWindow.getAllWindows()) observeWindow(undefined, window);
   void updateForeground();
 
+  let dispatchQueue: Promise<void> = Promise.resolve();
+  function synchronizeIdentity(key: string, clientId: string) {
+    if (disposed || identities.get(key) === clientId) return;
+    identities.set(key, clientId);
+    for (const [senderId, sender] of identitySenders) {
+      if (sender.isDestroyed() || !options.isAllowedSender(sender) || rendererIdentityKeys.get(senderId) !== key) continue;
+      try {
+        // A frozen auxiliary renderer must not block the collector's command queue.
+        void sender.executeJavaScript(`(() => {
+          const client = window[Symbol.for('electron-ga4.desktop.clients')]?.get(${JSON.stringify(id)});
+          client?.synchronizeClientId(${JSON.stringify(clientId)});
+        })()`).catch(() => report('IDENTITY_SYNC_FAILED'));
+      } catch { report('IDENTITY_SYNC_FAILED'); }
+    }
+  }
+
   const onCommand = async (event: Electron.IpcMainInvokeEvent, args: unknown) => {
     if (disposed || !options.isAllowedSender(event.sender) ||
         event.senderFrame !== event.sender.mainFrame) throw new Error('Unauthorized Google tag request');
@@ -188,16 +281,21 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
       return null;
     }
     if (!collectionEnabled && args[0] === 'event') return null;
-    const identityKey = rendererIdentityKeys.get(event.sender.id);
-    if (identityKey && args[0] === 'config' && args[1] === id && args[2] && typeof args[2] === 'object') {
-      const clientId = (args[2] as Record<string, unknown>).client_id;
-      if (typeof clientId === 'string' && /^\d+\.\d+$/.test(clientId)) sharedIdentities.set(identityKey, clientId);
-    }
     const serialized = JSON.stringify(args);
     if (serialized.length > 256_000) throw new Error('Google tag command too large');
-    await ready;
-    if (disposed) throw new Error('Google tag transport disposed');
-    return collector.webContents.executeJavaScript(`(() => {
+    const dispatch = dispatchQueue.then(async () => {
+      await waitForCollector();
+      if (disposed) throw new Error('Google tag transport disposed');
+      if (!options.isAllowedSender(event.sender) || event.senderFrame !== event.sender.mainFrame)
+        throw new Error('Unauthorized Google tag request');
+      if (!collectionEnabled && args[0] === 'event') return { response: Promise.resolve(null) };
+      const identityKey = rendererIdentityKeys.get(event.sender.id);
+      if (identityKey && args[0] === 'config' && args[1] === id && args[2] && typeof args[2] === 'object') {
+        const clientId = (args[2] as Record<string, unknown>).client_id;
+        if (isClientId(clientId)) synchronizeIdentity(identityKey, clientId);
+      }
+      tagState.remember(args);
+      const response = collector.webContents.executeJavaScript(`(() => {
       const args = ${serialized};
       let callbackPresent = false;
       let finish;
@@ -218,7 +316,13 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
       if (!callbackPresent) return null;
       const timer = setTimeout(() => finish(null), 10000);
       return response.finally(() => clearTimeout(timer));
-    })()`);
+      })()`);
+      void response.catch(() => undefined);
+      // Serialize dispatch, not callback completion: a slow get/event callback must not block events.
+      return { response };
+    });
+    dispatchQueue = dispatch.then(() => undefined, () => undefined);
+    return (await dispatch).response;
   };
   ipcMain.handle(COMMAND, onCommand);
   let rendererRuntime: string | undefined;
@@ -232,12 +336,26 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
       if (renderer === false) return null;
       rendererRuntime ??= readFileSync(join(__dirname, 'renderer-bootstrap.js'), 'utf8');
       const identityKey = renderer.clientIdStorageKey === false ? undefined : renderer.clientIdStorageKey ?? `electron-ga4:${id}:client-id`;
-      if (identityKey) rendererIdentityKeys.set(event.sender.id, identityKey);
-      const clientId = renderer.clientId ?? (identityKey ? sharedIdentities.get(identityKey) : undefined);
+      if (identityKey) {
+        rendererIdentityKeys.set(event.sender.id, identityKey);
+        identitySenders.set(event.sender.id, event.sender);
+      }
+      let clientId = renderer.clientId;
+      if (identityKey) clientId ??= identities.get(identityKey);
+      if (identityKey && renderer.enabled !== false) {
+        if (!clientId) {
+          // Migrate an existing renderer ID before generating any new installation identity.
+          const legacy = await event.senderFrame!.executeJavaScript(`(() => {
+            try { return window.localStorage.getItem(${JSON.stringify(identityKey)}); }
+            catch { return null; }
+          })()`);
+          clientId = identities.resolve(identityKey, legacy);
+        }
+        if (isClientId(clientId)) identities.set(identityKey, clientId);
+      }
       const configuration = { pageLocation: `${origin.origin}/`, ...renderer, ...(clientId ? { clientId } : {}), measurementId: id };
-      // Serialize first-window identity creation, then inject the canonical ID into sibling windows.
+      // Serialize migration/creation, then inject Main's durable ID into every window.
       const initialized = await event.senderFrame!.executeJavaScript(`${rendererRuntime}(${JSON.stringify(configuration)})`) as { measurementId: string; clientId?: string } | null;
-      if (identityKey && initialized?.clientId && /^\d+\.\d+$/.test(initialized.clientId)) sharedIdentities.set(identityKey, initialized.clientId);
       return initialized?.measurementId ?? null;
     });
     initialization = result.catch(() => undefined);
@@ -249,6 +367,10 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
   function dispose() {
     if (disposed) return;
     disposed = true;
+    collectorStatus = 'disposed';
+    if (recoveryTimer) clearTimeout(recoveryTimer);
+    cancelRecoveryDelay?.();
+    collector.webContents.removeListener('render-process-gone', onCollectorGone);
     app.removeListener('will-quit', dispose);
     ipcMain.removeHandler(COMMAND);
     ipcMain.removeHandler(INITIALIZE);
@@ -256,7 +378,7 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
     for (const remove of observedWindows.values()) remove();
     observedWindows.clear();
     rendererIdentityKeys.clear();
-    sharedIdentities.clear();
+    identitySenders.clear();
     for (const remove of observedSessions.values()) remove();
     observedSessions.clear();
     powerMonitor.removeListener('suspend', onSuspend);
@@ -268,7 +390,9 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
     if (!collector.isDestroyed()) collector.destroy();
     collectorSession.protocol.unhandle('https');
   }
-  return { ready, dispose, collector, recordExternalOpen, openExternal };
+  return { ready, dispose, collector, recordExternalOpen, openExternal,
+    diagnostics: () => ({ identityPersistence: identities.status, collectorStatus, recoveryAttempts }),
+  };
 }
 
 
