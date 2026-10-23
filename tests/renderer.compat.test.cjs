@@ -1,57 +1,34 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { EventEmitter } = require('node:events');
+const { Window } = require('happy-dom');
 const { ElectronGA4Telemetry } = require('../dist/renderer.js');
 
-function emitter() {
-  const e = new EventEmitter();
-  return {
-    addEventListener(name, fn) { e.on(name, fn); },
-    removeEventListener(name, fn) { e.off(name, fn); },
-    dispatch(name, event) { e.emit(name, event); },
-  };
-}
-function fakeBrowser() {
-  const winEvents = emitter(), docEvents = emitter();
-  const scripts = [];
+function browser() {
+  const win = new Window({
+    url: 'app://desktop/index.html',
+    settings: { disableJavaScriptFileLoading: true, handleDisabledFileLoadingAsSuccess: true },
+  });
+  const doc = win.document;
   const ctx = {
     clientId: '654321.1730000000', appVersion: '3.0.0', platform: 'darwin', arch: 'arm64',
     osRelease: '24.1.0', channel: 'stable', firstInstall: true, startupMs: 100,
   };
-  const bridge = {
+  win.electronTelemetry = {
     getContext: async () => ctx, ready() {}, setEnabled() {}, onEvent: () => () => {},
     captureCampaign() {}, reportActivity() {},
   };
-  let pathname = '/';
-  const win = {
-    ...winEvents, electronTelemetry: bridge,
-    location: { href: 'app://desktop/index.html', protocol:'app:', hostname:'desktop',
-      get pathname() { return pathname; }, hash:'' },
-    devicePixelRatio:2, innerHeight:800, scrollY:0,
-  };
-  const doc = {
-    ...docEvents,
-    head: { appendChild(s) { scripts.push(s); } },
-    createElement: () => ({ dataset:{}, async:false }),
-    querySelector: () => null,
-    visibilityState:'visible', readyState:'complete', hasFocus:() => true,
-    documentElement:{scrollHeight:1600},
-  };
-  const hist = {
-    pushState(_, __, path) { pathname = path; },
-    replaceState(_, __, path) { pathname = path; },
-  };
-  Object.assign(global, {window:win,document:doc,history:hist,screen:{width:1920,height:1080}});
-  Object.defineProperty(global,'navigator',{configurable:true,value:{language:'en-US'}});
+  Object.assign(globalThis, {window: win, document: doc, history: win.history, screen: win.screen});
+  Object.defineProperty(globalThis, 'navigator', {configurable: true, value: win.navigator});
   return {
-    win,doc,scripts,
+    win, doc,
+    get scripts() { return doc.querySelectorAll('script'); },
     events: () => (win.dataLayer ?? []).filter(e => e[0] === 'event')
       .map(e => ({name:e[1], params:e[2]})),
   };
 }
 
 test('uses gtag Web recommended and ecommerce event schemas without faking session_start', async () => {
-  const f = fakeBrowser();
+  const f = browser();
   const t = new ElectronGA4Telemetry({
     measurementId:'G-TEST123', virtualPageOrigin:'https://desktop.example.com',
     enabled:true, allowSearchTerms:true,
@@ -86,11 +63,13 @@ test('uses gtag Web recommended and ecommerce event schemas without faking sessi
     const d = await t.diagnostics(100);
     assert.deepEqual(d, {enabled:true,protocol:'app:',scriptLoaded:true,
       clientIdMatchesProfile:true,sessionIdPresent:true,sessionNumberPresent:true});
-  } finally { t.destroy(); }
+  } finally { t.destroy(); await f.win.happyDOM.abort(); }
 });
 
-test('explicit enhanced measurement fallback emits Web event names and redacts URL', async () => {
-  const f = fakeBrowser();
+test('user retains legacy enhanced measurement and redacted URLs with real DOM events', async () => {
+  // Given an explicitly enabled legacy fallback and actual DOM event propagation.
+  // This contract test covers event metadata; real Electron media playback is verified separately.
+  const f = browser();
   const t = new ElectronGA4Telemetry({
     measurementId:'G-TEST123',virtualPageOrigin:'https://desktop.example.com',enabled:true,
     enhancedFallback: {
@@ -100,36 +79,52 @@ test('explicit enhanced measurement fallback emits Web event names and redacts U
   });
   try {
     await t.init();
-    f.win.scrollY = 650;
-    f.win.dispatch('scroll', {});
-    f.win.dispatch('scroll', {});
-    assert.equal(f.events().filter(e=>e.name==='scroll').length,1);
+    // happy-dom has no layout engine, so supply the page's measured geometry.
+    Object.defineProperty(f.doc.documentElement, 'scrollHeight', {value: 1600});
+    f.win.innerHeight = 800;
+    f.win.scrollTo({top: 650, behavior: 'instant'});
+    // When the user scrolls, follows a download link, submits a form and plays a marked video.
+    f.doc.dispatchEvent(new f.win.Event('scroll'));
+    f.doc.dispatchEvent(new f.win.Event('scroll'));
+    // Then scrolling is reported once and enhanced events retain their redacted contracts.
+    assert.deepEqual(f.events().filter(e => e.name === 'scroll').map(e => e.params.percent_scrolled), [90]);
 
-    const anchor = { getAttribute: () => 'https://external.example.org/path/video.mp4?private=1' };
-    f.doc.dispatch('click', {target:{closest(sel){return sel==='a[href]'?anchor:null;}}});
+    const anchor = f.doc.createElement('a');
+    anchor.href = 'https://external.example.org/path/video.mp4?private=1';
+    anchor.addEventListener('click', event => event.preventDefault());
+    f.doc.body.append(anchor);
+    anchor.dispatchEvent(new f.win.MouseEvent('click', {bubbles: true, cancelable: true}));
     const click = f.events().find(e=>e.name==='click');
     assert.equal(click.params.link_url,'https://external.example.org');
     assert.equal(click.params.link_domain,'external.example.org');
     assert.equal(f.events().find(e=>e.name==='file_download').params.file_extension,'mp4');
     assert.ok(!JSON.stringify(click).includes('private=1'));
 
-    const form = {getAttribute:()=> 'signup'};
-    const formTarget = {closest:()=>form};
-    f.doc.dispatch('focusin',{target:formTarget});
-    f.doc.dispatch('focusin',{target:formTarget});
-    f.doc.dispatch('submit',{target:formTarget});
+    const form = f.doc.createElement('form');
+    form.setAttribute('data-ga4-form', 'signup');
+    const input = f.doc.createElement('input');
+    input.value = 'private@example.com';
+    form.append(input);
+    f.doc.body.append(form);
+    input.dispatchEvent(new f.win.FocusEvent('focusin', {bubbles: true}));
+    input.dispatchEvent(new f.win.FocusEvent('focusin', {bubbles: true}));
+    form.dispatchEvent(new f.win.Event('submit', {bubbles: true, cancelable: true}));
     assert.equal(f.events().filter(e=>e.name==='form_start').length,1);
     assert.equal(f.events().filter(e=>e.name==='form_submit').length,1);
 
-    const video = {
-      duration:100,currentTime:0,matches:()=>true,getAttribute:()=> 'demo_video',
-    };
-    f.doc.dispatch('play',{type:'play',target:video});
-    video.currentTime=55;
-    f.doc.dispatch('timeupdate',{type:'timeupdate',target:video});
-    f.doc.dispatch('ended',{type:'ended',target:video});
+    const video = f.doc.createElement('video');
+    video.setAttribute('data-ga4-video', 'demo_video');
+    f.doc.body.append(video);
+    // happy-dom does not decode media; supply metadata from the playback fixture.
+    Object.defineProperty(video, 'duration', {value: 100});
+    video.dispatchEvent(new f.win.Event('play'));
+    video.currentTime = 55;
+    video.dispatchEvent(new f.win.Event('timeupdate'));
+    video.dispatchEvent(new f.win.Event('ended'));
     assert.equal(f.events().filter(e=>e.name==='video_start').length,1);
     assert.equal(f.events().filter(e=>e.name==='video_progress').length,3);
     assert.equal(f.events().filter(e=>e.name==='video_complete').length,1);
-  } finally { t.destroy(); }
+    assert.ok(!JSON.stringify(f.events()).includes('private@example.com'));
+    assert.ok(!JSON.stringify(f.events()).includes('private=1'));
+  } finally { t.destroy(); await f.win.happyDOM.abort(); }
 });
