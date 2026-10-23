@@ -93,6 +93,11 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
         }
         catch { /* Analytics must not affect the app lifecycle. */ }
     }
+    /** Preserve Electron's open behavior; emit telemetry only after the OS accepts the request. */
+    async function openExternal(sender, url, openOptions) {
+        await electron_1.shell.openExternal(url, openOptions);
+        recordExternalOpen(sender, url);
+    }
     function recordExternalOpen(sender, url) {
         try {
             if (disposed || !collectionEnabled || sender.isDestroyed() || !options.isAllowedSender(sender))
@@ -106,7 +111,7 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
     }
     const observedSessions = new Map();
     function observeDownloads(sender) {
-        if (!options.nativeDownloads || observedSessions.has(sender.session))
+        if (options.nativeDownloads === false || observedSessions.has(sender.session))
             return;
         const sourceSession = sender.session;
         const download = (_event, item, source) => {
@@ -202,10 +207,12 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
     })()`);
     };
     electron_1.ipcMain.handle(COMMAND, onCommand);
+    electron_1.app.once('will-quit', dispose);
     function dispose() {
         if (disposed)
             return;
         disposed = true;
+        electron_1.app.removeListener('will-quit', dispose);
         electron_1.ipcMain.removeHandler(COMMAND);
         electron_1.app.removeListener('browser-window-created', observeWindow);
         for (const remove of observedWindows.values())
@@ -224,5 +231,5 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
             collector.destroy();
         collectorSession.protocol.unhandle('https');
     }
-    return { ready, dispose, collector, recordExternalOpen };
+    return { ready, dispose, collector, recordExternalOpen, openExternal };
 }

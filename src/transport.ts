@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, powerMonitor, session, type Session, type DownloadItem, type WebContents } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, session, shell, type Session, type DownloadItem, type WebContents } from 'electron';
 
 const COMMAND = 'electron-ga4:command';
 const CALLBACK_MARKER = '__electron_ga4_callback__';
@@ -13,7 +13,7 @@ export interface GoogleTagTransportOptions {
   partition?: string;
   /** Explicit HTTPS collection endpoints, e.g. a first-party GA4 server container. */
   additionalAllowedOrigins?: string[];
-  /** Observe real DownloadItems only for trusted application windows. */
+  /** Observe trusted app DownloadItems by default; set false to disable. */
   nativeDownloads?: boolean;
 }
 
@@ -100,6 +100,11 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
       );
     } catch { /* Analytics must not affect the app lifecycle. */ }
   }
+  /** Preserve Electron's open behavior; emit telemetry only after the OS accepts the request. */
+  async function openExternal(sender: WebContents, url: string, openOptions?: Parameters<typeof shell.openExternal>[1]): Promise<void> {
+    await shell.openExternal(url, openOptions);
+    recordExternalOpen(sender, url);
+  }
   function recordExternalOpen(sender: WebContents, url: string): void {
     try {
       if (disposed || !collectionEnabled || sender.isDestroyed() || !options.isAllowedSender(sender)) return;
@@ -110,7 +115,7 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
   }
   const observedSessions = new Map<Session, () => void>();
   function observeDownloads(sender: WebContents) {
-    if (!options.nativeDownloads || observedSessions.has(sender.session)) return;
+    if (options.nativeDownloads === false || observedSessions.has(sender.session)) return;
     const sourceSession = sender.session;
     const download = (_event: Electron.Event, item: DownloadItem, source: WebContents) => {
       try {
@@ -199,9 +204,12 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
   };
   ipcMain.handle(COMMAND, onCommand);
 
+  app.once('will-quit', dispose);
+
   function dispose() {
     if (disposed) return;
     disposed = true;
+    app.removeListener('will-quit', dispose);
     ipcMain.removeHandler(COMMAND);
     app.removeListener('browser-window-created', observeWindow);
     for (const remove of observedWindows.values()) remove();
@@ -217,5 +225,5 @@ window.gtag = function gtag(){window.dataLayer.push(arguments);};
     if (!collector.isDestroyed()) collector.destroy();
     collectorSession.protocol.unhandle('https');
   }
-  return { ready, dispose, collector, recordExternalOpen };
+  return { ready, dispose, collector, recordExternalOpen, openExternal };
 }

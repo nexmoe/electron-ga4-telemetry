@@ -41,6 +41,17 @@ YouTube 的官方 API 与真实 embed 能加载，已按官方契约安装监听
 命令兼容不等于 Google Ads/Floodlight、多 property 漏斗或全部 gtag 场景已经验证。
 15 个相关库契约测试及真实 Electron transport smoke 通过；未运行整个宿主仓库门禁。
 
+## 桌面快捷入口验收（2026-10-23）
+
+新增 `/desktop` 统一单例、匿名 ID 持久化和增强采集默认值；旧存储键迁移、无权限存储降级、
+禁用时不创建 ID 均有 DOM/存储契约覆盖。真实 Electron `tests/electron-transport.cjs` 已验证
+默认内部滚动、真实 DownloadItem 下载与原生外链脱敏、Google client/session 回调、暂停/恢复及销毁重建后的身份保持。
+脚本先等待 collector 加载就绪，再开始 Google 回调截止计时，避免把首次脚本加载延迟算作回调失败。
+
+30 项库内契约测试通过；本次涉及的 `dist/desktop.js` / `dist/gtag.js` 分支覆盖率合计 76%，
+其中快捷入口为 92.86%。剩余主要为真实 preload 桥接回调与路由分支，另有真实 Electron smoke，
+但未将 Electron 覆盖数据合并进该数字；不代表整个库均达到此覆盖率。
+
 ## v0.3 原始验收清单
 
 以下清单主要针对旧 `/main`、`/renderer` 可选桌面指标；其自定义日活/会话/滚动不能代替

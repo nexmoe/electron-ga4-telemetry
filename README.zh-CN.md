@@ -8,7 +8,41 @@
 
 `/gtag` 原生客户端保留官方命令、配置、大小写事件名、显式 `send_to`、嵌套电商参数和回调；不默认注入 consent 或关闭广告信号。应用可通过 `consent` 和 `config` 显式选择策略。SDK 的暂停/恢复只控制上报，不修改原生 consent，也不销毁 Google 会话。
 
-桥接增强层补充文档/内部容器 90% 滚动、完整外链与下载元数据、普通表单、HTML5 视频和 URL 查询参数搜索。`enhancedMeasurement.privacy='redacted'` 则保留 origin-only 外链、表单/视频标记和搜索词审批策略；旧 `/renderer` 的隐私过滤继续保留。`additionalAllowedOrigins` 可显式允许经过校验的 HTTPS 自建采集域名，不移除 CSP 白名单。新增 `youtubeVideo` 适配启用 JS API 的 YouTube iframe；宿主须允许官方脚本/frame CSP 并提供有效 HTTP Referer，脱敏模式还须标记 `data-ga4-video`。主进程启用 `nativeDownloads`、渲染器同时启用 `nativeDownloads` 和 `fileDownloads` 后，可观察真实 Electron 下载；成功调用 `shell.openExternal` 后用 `transport.recordExternalOpen(sender, url)` 记录原生外链。相同 URL 的 DOM/原生事件在 1.5 秒内去重，下载只记录开始、不上传本地保存路径。
+桥接增强层补充文档/内部容器 90% 滚动、完整外链与下载元数据、普通表单、HTML5 视频和 URL 查询参数搜索。`enhancedMeasurement.privacy='redacted'` 则保留 origin-only 外链、表单/视频标记和搜索词审批策略；旧 `/renderer` 的隐私过滤继续保留。`additionalAllowedOrigins` 可显式允许经过校验的 HTTPS 自建采集域名，不移除 CSP 白名单。新增 `youtubeVideo` 适配启用 JS API 的 YouTube iframe；宿主须允许官方脚本/frame CSP 并提供有效 HTTP Referer，脱敏模式还须标记 `data-ga4-video`。主进程与 `/desktop` 快捷入口默认启用下载适配；底层渲染器同时启用 `nativeDownloads` 和 `fileDownloads` 后，可观察真实 Electron 下载；成功调用 `shell.openExternal` 后用 `transport.recordExternalOpen(sender, url)` 记录原生外链。相同 URL 的 DOM/原生事件在 1.5 秒内去重，下载只记录开始、不上传本地保存路径。
+
+
+## 精简桌面接入
+
+Main 仍调用 `createGoogleTagTransport({ measurementId, origin, isAllowedSender })`，已有 Preload
+只需调用 `installGoogleTagPreload()`。Renderer 推荐使用新的快捷入口：
+
+```ts
+import { getDesktopGoogleAnalytics } from 'electron-ga4-telemetry/desktop';
+
+const analytics = getDesktopGoogleAnalytics({
+  measurementId: 'G-XXXXXXXXXX',
+  pageLocation: 'https://desktop.example.com/',
+  // enabled: analyticsConsent,
+  // privacy: 'redacted',
+  // clientIdStorageKey: 'existing-app-client-id',
+});
+analytics.initialize();
+analytics.track('tutorial_complete');
+analytics.setClientId(verifiedWebClientId); // 自动持久化已验证的匿名身份
+```
+
+快捷入口默认启用采集，不注入 consent 或广告策略。默认开启桌面增强适配；只传
+`privacy: 'redacted'` 即可切换脱敏策略，`enhancedMeasurement: { forms: false }`
+只关闭表单，其他默认适配保留。业务事件、路由脱敏、辅助窗口的 PV 和同意策略仍由宿主决定。
+
+同一窗口、同一 Measurement ID 复用一个实例，跨模块重载也不会重复初始化；首次配置生效，
+后续变更通过客户端方法完成，`destroy()` 后可重新创建。匿名 ID 在初始化时才创建，默认键为
+`electron-ga4:<MEASUREMENT_ID>:client-id`；指定旧存储键可无缝迁移，设置 `false` 则交给 Google
+管理身份。存储受限时退回进程内身份；此时不承诺重启后身份保持。
+
+transport 默认观察可信窗口的真实下载，自动在 `will-quit` 清理。原生外链使用
+`await transport.openExternal(sender, url)`，库在系统打开成功后记录；已有外链封装仍可继续调用
+`recordExternalOpen`。底层 `/gtag` 的原有默认行为不变。
 
 
 基于 **Google 官方 `gtag.js`** 的 Electron 主进程 + Preload + Renderer 指标封装。仅需要 Web Data Stream 的 `G-...` Measurement ID，**不需要 API Secret**。

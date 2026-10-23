@@ -48,6 +48,11 @@
       "require": "./dist/ga4-web.js",
       "default": "./dist/ga4-web.js"
     },
+    "./desktop": {
+      "types": "./dist/desktop.d.ts",
+      "require": "./dist/desktop.js",
+      "default": "./dist/desktop.js"
+    },
     "./gtag": {
       "types": "./dist/gtag.d.ts",
       "require": "./dist/gtag.js",

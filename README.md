@@ -22,20 +22,19 @@ const transport = createGoogleTagTransport({
   origin: 'https://desktop.example.com', // an origin you control; its page is served locally
   isAllowedSender: sender => trustedApplicationWebContents.has(sender.id),
 });
-app.once('will-quit', transport.dispose);
 
 // Add to your existing preload. Bundle this entry when using sandboxed preload.
 import { installGoogleTagPreload } from 'electron-ga4-telemetry/transport-preload';
 installGoogleTagPreload();
 
-// Renderer: keep your existing identity, consent, event names and application policy.
-import { GoogleAnalyticsClient } from 'electron-ga4-telemetry/gtag';
-const analytics = new GoogleAnalyticsClient({
+// Renderer: singleton, anonymous identity storage and enhanced defaults are included.
+import { getDesktopGoogleAnalytics } from 'electron-ga4-telemetry/desktop';
+const analytics = getDesktopGoogleAnalytics({
   measurementId: 'G-XXXXXXXXXX',
-  clientId: existingAnonymousClientId, // optional; numeric.numeric
   pageLocation: 'https://desktop.example.com/',
   pageTitle: 'Desktop',
   enabled: analyticsConsent,
+  // privacy: 'redacted', // optional: origin-only URLs and marked forms/videos
 });
 analytics.initialize();
 analytics.track('tutorial_complete');
@@ -50,7 +49,11 @@ analytics.setEnabled(false);
 
 `gtag(...args)` forwards the native `config`, `set`, `get`, `event`, `consent` and `js` commands, nested parameters and callbacks. `config` accepts official tag settings. Native GA4 first-visit, session and engagement processing stays in Google's script. The native client does not inject consent or advertising-signal settings. Pass `consent` and official `config` values when the application wants to own those policies. SDK pause/resume does not grant or withdraw consent; use native consent commands for that.
 
-The transport uses its own persistent Electron session. Only allowlisted main frames may issue commands; the collector has no Node access or application preload. Foreground visibility follows trusted application windows rather than the invisible collector, and becomes hidden during system suspend or screen lock. Dispose the transport before app shutdown.
+`/desktop` enables collection unless `enabled: false` is supplied. It does not inject consent or advertising policy. Calls for the same window/measurement ID reuse one client, even across module reloads; the first call owns configuration. `destroy()` unregisters it. Identity is created lazily on initialization, retained under `electron-ga4:<MEASUREMENT_ID>:client-id`, and updated by `setClientId()`. Set `clientIdStorageKey` to an existing app key for a migration, or `false` to retain Google's identity management; blocked storage falls back to memory. Enhanced defaults are merged with your individual overrides, so `{ forms: false }` does not disable other adapters.
+
+The lower-level `GoogleAnalyticsClient` in `/gtag` remains available; its consent, enabled and identity defaults are unchanged.
+
+The transport uses its own persistent Electron session. Only allowlisted main frames may issue commands; the collector has no Node access or application preload. Foreground visibility follows trusted application windows rather than the invisible collector, and becomes hidden during system suspend or screen lock. It automatically disposes on `will-quit`; call `dispose()` for earlier teardown.
 
 ## Automatic events and boundaries
 
@@ -64,13 +67,13 @@ The native command API preserves GA4 command/configuration capabilities, includi
 
 ## Native browser opens and downloads
 
-Enable `nativeDownloads: true` on the main transport and `nativeDownloads: true, fileDownloads: true` in the renderer's enhanced measurement options. The transport observes real `will-download` events only for trusted app windows. Server-provided filenames support extensionless download URLs; local save paths are never sent. `file_download` measures initiation, not successful completion.
+Native downloads are enabled by default on the transport and `/desktop` entry. Set `nativeDownloads: false` on the transport to opt out. Lower-level renderer clients with custom enhanced options must include `nativeDownloads: true, fileDownloads: true`. The transport observes real `will-download` events only for trusted app windows. Server-provided filenames support extensionless download URLs; local save paths are never sent. `file_download` measures initiation, not successful completion.
 
-After a successful OS browser open, notify the transport using the originating WebContents:
+Use the transport helper to open the system browser and measure the successful action:
 
 ```ts
-await shell.openExternal(url);
-transport.recordExternalOpen(sourceWindow.webContents, url);
+await transport.openExternal(sourceWindow.webContents, url);
+// Existing shell integrations can still call recordExternalOpen(sender, url) after success.
 ```
 
 The preload relays these notifications to the renderer, so its current page metadata and privacy policy apply. Only HTTP/HTTPS URLs without credentials are accepted. Matching DOM/native link notifications within 1.5 seconds are coalesced to avoid counting the same action twice. This does not intercept or replace Electron's `shell` implementation. Multiple renderer windows share one collector; configure `sendPageView: false, autoPageViews: false` on auxiliary windows.

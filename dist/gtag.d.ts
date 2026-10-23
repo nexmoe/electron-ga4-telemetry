@@ -4,6 +4,8 @@ export type GoogleTag = (...args: unknown[]) => void;
 export interface GoogleAnalyticsOptions {
     measurementId: string;
     clientId?: string;
+    /** Opt into library-owned anonymous identity storage; false leaves identity to Google. */
+    clientIdStorageKey?: string | false;
     pageLocation?: string;
     pageTitle?: string;
     /** Persisted consent. No script or command is created until enabled. */
@@ -40,6 +42,8 @@ export declare class GoogleAnalyticsClient {
     private pageTitle?;
     constructor(options: GoogleAnalyticsOptions);
     initialize(): boolean;
+    private persistIdentity;
+    private initializeIdentity;
     setClientId(clientId: string): boolean;
     setEnabled(enabled: boolean): void;
     /** Native gtag command API; payloads and callbacks pass through unchanged. */

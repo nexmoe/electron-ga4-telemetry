@@ -14,6 +14,8 @@ interface GoogleTagWindow extends Window {
 export interface GoogleAnalyticsOptions {
   measurementId: string;
   clientId?: string;
+  /** Opt into library-owned anonymous identity storage; false leaves identity to Google. */
+  clientIdStorageKey?: string | false;
   pageLocation?: string;
   pageTitle?: string;
   /** Persisted consent. No script or command is created until enabled. */
@@ -117,6 +119,7 @@ export class GoogleAnalyticsClient {
   initialize(): boolean {
     if (!this.enabled) return false;
     if (this.initialized) return true;
+    this.initializeIdentity();
     const gtag = getOrCreateGoogleTag();
     setGoogleTagEnabled(this.id, true);
     if (this.options.consent) gtag('consent', 'default', this.options.consent);
@@ -134,9 +137,34 @@ export class GoogleAnalyticsClient {
     return true;
   }
 
+  private persistIdentity(): void {
+    if (!this.clientId || !this.options.clientIdStorageKey) return;
+    try { window.localStorage.setItem(this.options.clientIdStorageKey, this.clientId); }
+    catch { /* Storage restrictions must not prevent in-memory analytics. */ }
+  }
+
+  private initializeIdentity(): void {
+    const key = this.options.clientIdStorageKey;
+    if (!key) return;
+    if (!this.clientId) {
+      try {
+        const stored = window.localStorage.getItem(key);
+        if (stored && /^\d+\.\d+$/.test(stored)) this.clientId = stored;
+      } catch { /* Opaque origins can deny localStorage. */ }
+      if (!this.clientId) {
+        let random: number;
+        try { random = window.crypto.getRandomValues(new Uint32Array(1))[0]; }
+        catch { random = Math.floor(Math.random() * 0x100000000); }
+        this.clientId = `${random}.${Math.floor(Date.now() / 1000)}`;
+      }
+    }
+    this.persistIdentity();
+  }
+
   setClientId(clientId: string): boolean {
     if (!/^\d+\.\d+$/.test(clientId)) return false;
     this.clientId = clientId;
+    this.persistIdentity();
     if (this.initialized && this.enabled) {
       getOrCreateGoogleTag()('config', this.id, {
         client_id: clientId, update: true, send_page_view: false,

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add `/desktop` quick setup with a per-window/stream singleton, lazy anonymous identity persistence, legacy storage-key migration and merged enhanced-measurement defaults.
+- Add `transport.openExternal()` and automatic transport teardown on app exit; observe trusted-window downloads by default with an explicit opt-out.
+- Keep low-level `/gtag` defaults and application-owned consent, advertising and business policies intact.
+
 - Add trusted-window native browser-open/download adapters, response filenames and DOM/native deduplication without exposing local save paths.
 - Complete standard form metadata and HTML5 playback lifecycle; add an optional official YouTube iframe API adapter.
 - Synchronize collector visibility with system suspend/resume and screen lock/unlock.

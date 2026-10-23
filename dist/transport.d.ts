@@ -1,4 +1,4 @@
-import { BrowserWindow, type WebContents } from 'electron';
+import { BrowserWindow, shell, type WebContents } from 'electron';
 export interface GoogleTagTransportOptions {
     measurementId: string;
     /** Dedicated HTTPS origin owned by the application; served locally, never from the network. */
@@ -9,7 +9,7 @@ export interface GoogleTagTransportOptions {
     partition?: string;
     /** Explicit HTTPS collection endpoints, e.g. a first-party GA4 server container. */
     additionalAllowedOrigins?: string[];
-    /** Observe real DownloadItems only for trusted application windows. */
+    /** Observe trusted app DownloadItems by default; set false to disable. */
     nativeDownloads?: boolean;
 }
 /**
@@ -21,4 +21,5 @@ export declare function createGoogleTagTransport(options: GoogleTagTransportOpti
     dispose: () => void;
     collector: BrowserWindow;
     recordExternalOpen: (sender: WebContents, url: string) => void;
+    openExternal: (sender: WebContents, url: string, openOptions?: Parameters<typeof shell.openExternal>[1]) => Promise<void>;
 };
